@@ -232,9 +232,36 @@ func createTree(ctx context.Context, c *github.Client, owner, repo, base string,
 		}
 		entries = append(entries, &github.TreeEntry{Path: github.String(path), Mode: github.String("100644"), Type: github.String("blob"), SHA: blob.SHA})
 	}
-	tree, _, err := c.Git.CreateTree(ctx, owner, repo, base, entries)
+	// Use gh for this request. The v79 client serializes this endpoint in a
+	// form GitHub currently rejects, while gh sends the same API payload as the
+	// CLI's other repository operations.
+	body, err := json.Marshal(struct {
+		BaseTree string              `json:"base_tree,omitempty"`
+		Tree     []*github.TreeEntry `json:"tree"`
+	}{BaseTree: base, Tree: entries})
+	if err != nil {
+		return nil, fmt.Errorf("encode tree: %w", err)
+	}
+	tmp, err := os.CreateTemp("", "gh-share-tree-*.json")
+	if err != nil {
+		return nil, fmt.Errorf("create tree request: %w", err)
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		return nil, fmt.Errorf("write tree request: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, fmt.Errorf("close tree request: %w", err)
+	}
+	out, err := exec.CommandContext(ctx, "gh", "api", "--method", "POST", "repos/"+owner+"/"+repo+"/git/trees", "--input", name).Output()
 	if err != nil {
 		return nil, fmt.Errorf("create tree: %w", err)
+	}
+	tree := new(github.Tree)
+	if err := json.Unmarshal(out, tree); err != nil {
+		return nil, fmt.Errorf("decode tree response: %w", err)
 	}
 	return tree, nil
 }
