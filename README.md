@@ -139,6 +139,10 @@ $ go test ./...
 $ golangci-lint run ./...
 ```
 
+## Alternatives
+
+- [toiroakr/mayfly](https://github.com/toiroakr/mayfly): Ephemeral HTML previews via GitHub Actions artifacts, with PR integration and GitHub Pages publishing for previews that should be kept.
+
 ## License
 
 [MIT](LICENSE)
