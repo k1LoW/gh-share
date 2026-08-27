@@ -3,6 +3,7 @@ name: Upload Artifact
 on:
   push:
     paths:
+      - 'gh-share-payload/**'
       - '.gh-share-payload-ref'
 
 jobs:

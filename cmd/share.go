@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 
@@ -165,7 +164,7 @@ func hasPersistMarker(ctx context.Context, c *github.Client, owner, repo, branch
 }
 
 func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch string, files map[string][]byte) (string, error) {
-	_, _, err := c.Git.GetRef(ctx, owner, repo, "heads/"+branch)
+	ref, _, err := c.Git.GetRef(ctx, owner, repo, "heads/"+branch)
 	if err != nil {
 		var e *github.ErrorResponse
 		if !errors.As(err, &e) || e.Response.StatusCode != 404 {
@@ -182,103 +181,23 @@ func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch st
 		if _, _, err = c.Git.CreateRef(ctx, owner, repo, github.CreateRef{Ref: "refs/heads/" + branch, SHA: base.GetObject().GetSHA()}); err != nil {
 			return "", fmt.Errorf("create staging branch: %w", err)
 		}
-	}
-	files[".github/workflows/upload-artifact.yml"] = uploadWorkflow
-	paths := make([]string, 0, len(files))
-	for path := range files {
-		paths = append(paths, path)
-	}
-	sort.Slice(paths, func(i, j int) bool {
-		priority := func(path string) int {
-			if path == ".gh-share-payload-ref" {
-				return 2
-			}
-			if path == ".github/workflows/upload-artifact.yml" {
-				return 1
-			}
-			return 0
-		}
-		pi, pj := priority(paths[i]), priority(paths[j])
-		if pi != pj {
-			return pi < pj
-		}
-		return paths[i] < paths[j]
-	})
-	var last *github.RepositoryContentResponse
-	for _, path := range paths {
-		last, err = upsertFile(ctx, c, owner, repo, branch, path, files[path])
-		if err != nil {
-			return "", err
-		}
-	}
-	if last == nil || last.Commit.GetSHA() == "" {
-		return "", errors.New("file commit did not return a commit SHA")
-	}
-	return last.Commit.GetSHA(), nil
-}
-
-func upsertFile(ctx context.Context, c *github.Client, owner, repo, branch, path string, content []byte) (*github.RepositoryContentResponse, error) {
-	options := &github.RepositoryContentFileOptions{Message: github.String("Share payload"), Content: content, Branch: github.String(branch)}
-	existing, _, _, err := c.Repositories.GetContents(ctx, owner, repo, path, &github.RepositoryContentGetOptions{Ref: branch})
-	if err == nil {
-		if existing == nil || existing.GetSHA() == "" {
-			return nil, fmt.Errorf("get existing file %s: missing SHA", path)
-		}
-		options.SHA = github.String(existing.GetSHA())
-		result, _, err := c.Repositories.UpdateFile(ctx, owner, repo, path, options)
-		if err != nil {
-			return nil, fmt.Errorf("update file %s: %w", path, err)
-		}
-		return result, nil
-	}
-	var apiErr *github.ErrorResponse
-	if !errors.As(err, &apiErr) || apiErr.Response.StatusCode != 404 {
-		return nil, fmt.Errorf("check file %s: %w", path, err)
-	}
-	result, _, err := c.Repositories.CreateFile(ctx, owner, repo, path, options)
-	if err != nil {
-		return nil, fmt.Errorf("create file %s: %w", path, err)
-	}
-	return result, nil
-}
-
-func createOrphanCommit(ctx context.Context, c *github.Client, owner, repo, branch string, files map[string][]byte) (string, error) {
-	files[".github/workflows/upload-artifact.yml"] = uploadWorkflow
-	// GitHub's REST API rejects an empty base_tree for repositories whose tree
-	// has not been created through this API yet. Use the default branch tree as
-	// the tree base, while leaving the new commit parentless to preserve the
-	// orphan-branch design.
-	repository, _, err := c.Repositories.Get(ctx, owner, repo)
-	if err != nil {
-		return "", fmt.Errorf("get repository: %w", err)
-	}
-	ref, _, err := c.Git.GetRef(ctx, owner, repo, "heads/"+repository.GetDefaultBranch())
-	if err != nil {
-		return "", fmt.Errorf("get default branch: %w", err)
+		ref = base
 	}
 	baseCommit, _, err := c.Git.GetCommit(ctx, owner, repo, ref.GetObject().GetSHA())
 	if err != nil {
-		return "", fmt.Errorf("get default branch commit: %w", err)
+		return "", fmt.Errorf("get staging commit: %w", err)
 	}
-	// Seed the staging ref at a reachable commit. GitHub's REST API cannot
-	// update a ref to a parentless commit, so the initial staging commit keeps
-	// the default branch commit as its parent.
-	if _, _, err = c.Git.CreateRef(ctx, owner, repo, github.CreateRef{Ref: "refs/heads/" + branch, SHA: ref.GetObject().GetSHA()}); err != nil {
-		return "", fmt.Errorf("create staging branch: %w", err)
-	}
+	files[".github/workflows/upload-artifact.yml"] = uploadWorkflow
 	tree, err := createTree(ctx, c, owner, repo, ref.GetObject().GetSHA(), files)
 	if err != nil {
-		_, _ = c.Git.DeleteRef(ctx, owner, repo, "heads/"+branch)
 		return "", err
 	}
-	commit, _, err := c.Git.CreateCommit(ctx, owner, repo, github.Commit{Message: github.String("Initialize gh-share staging branch"), Tree: tree, Parents: []*github.Commit{baseCommit}}, nil)
+	commit, _, err := c.Git.CreateCommit(ctx, owner, repo, github.Commit{Message: github.String("Share payload"), Tree: tree, Parents: []*github.Commit{baseCommit}}, nil)
 	if err != nil {
-		_, _ = c.Git.DeleteRef(ctx, owner, repo, "heads/"+branch)
-		return "", err
+		return "", fmt.Errorf("create commit: %w", err)
 	}
 	if _, _, err = c.Git.UpdateRef(ctx, owner, repo, "heads/"+branch, github.UpdateRef{SHA: commit.GetSHA(), Force: github.Bool(true)}); err != nil {
-		_, _ = c.Git.DeleteRef(ctx, owner, repo, "heads/"+branch)
-		return "", fmt.Errorf("update staging branch to %s: %w", commit.GetSHA(), err)
+		return "", fmt.Errorf("update staging branch: %w", err)
 	}
 	return commit.GetSHA(), nil
 }
