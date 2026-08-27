@@ -1,4 +1,4 @@
-name: "gh-share: Upload Payload"
+name: "gh-share: Upload payload"
 
 on:
   push:
