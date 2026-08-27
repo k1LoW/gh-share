@@ -161,7 +161,9 @@ func share(ctx context.Context, input string) error {
 	}
 	s.Stop()
 	if shareJSON {
-		if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(result); err != nil {
 			return fmt.Errorf("encode JSON output: %w", err)
 		}
 	}
