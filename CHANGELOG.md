@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.1.2](https://github.com/k1LoW/gh-share/compare/v0.1.1...v0.1.2) - 2026-08-27
+
+### New Features 🎉
+- fix: use input name for artifact by @k1LoW in https://github.com/k1LoW/gh-share/pull/9
+
 ## [v0.1.1](https://github.com/k1LoW/gh-share/compare/v0.1.0...v0.1.1) - 2026-08-27
 
 ### New Features 🎉
