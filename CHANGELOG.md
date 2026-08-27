@@ -1,5 +1,12 @@
 # Changelog
 
+## [v0.1.1](https://github.com/k1LoW/gh-share/compare/v0.1.0...v0.1.1) - 2026-08-27
+
+### New Features 🎉
+- feat: support JSON upload output by @k1LoW in https://github.com/k1LoW/gh-share/pull/6
+### Other Changes
+- test: add GitHub API end-to-end coverage by @k1LoW in https://github.com/k1LoW/gh-share/pull/8
+
 ## [v0.1.0](https://github.com/k1LoW/gh-share/commits/v0.1.0) - 2026-08-27
 
 ### Fix bug 🐛
