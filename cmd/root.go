@@ -42,7 +42,15 @@ func Execute() {
 }
 
 func newShareCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "share <file|dir>", Short: "Upload a file or directory and print its artifact URL", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error { return share(cmd.Context(), args[0]) }}
+	cmd := &cobra.Command{
+		Use:   "share <file|dir>",
+		Short: "Share a single HTML file or other files and directories through GitHub Actions artifacts",
+		Long: `Share a single HTML file or other files and directories using GitHub's built-in Git and Actions APIs.
+
+gh-share creates a temporary staging branch, commits the payload and an upload workflow, waits for GitHub Actions to upload the artifact, and removes the branch when finished.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error { return share(cmd.Context(), args[0]) },
+	}
 	cmd.Flags().StringVar(&shareRepo, "repo", "", "Target repository (owner/repo; defaults to the current repository)")
 	cmd.Flags().StringVar(&shareBranch, "branch", defaultBranch, "Staging branch name")
 	cmd.Flags().BoolVar(&shareOpen, "open", false, "Open the artifact URL in the browser")

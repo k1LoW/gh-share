@@ -1,6 +1,6 @@
 # gh-share
 
-`gh-share` is a GitHub CLI (`gh`) extension that uploads a file or directory to a GitHub Actions artifact and prints the artifact URL.
+`gh-share` is a GitHub CLI (`gh`) extension for sharing a single HTML file or other files and directories using GitHub's built-in features, including GitHub Actions and artifact storage.
 
 The upload is performed through the GitHub API. It does not use the local Git repository to create or push commits.
 
