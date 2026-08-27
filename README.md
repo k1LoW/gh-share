@@ -7,21 +7,23 @@ The upload is performed through the GitHub API. It does not use the local Git re
 ## Usage
 
 ```bash
-# Upload a file from the current repository
-$ gh share design.md
+# Share a single-page HTML file
+$ gh share pr123.html
 
 # Upload a directory
 $ gh share assets/
 
 # Upload to another repository
-$ gh share --repo owner/repo design.md
+$ gh share --repo owner/repo pr123.html
 
 # Open the artifact URL after the upload completes
-$ gh share --open design.md
+$ gh share --open pr123.html
 
 # Keep the staging branch after the upload
-$ gh share --persist design.md
+$ gh share --persist pr123.html
 ```
+
+The primary use case is sharing a single-page HTML file. The command also supports arbitrary files and directories.
 
 The command displays progress while it creates the staging branch, creates the commit, waits for the workflow, and removes or keeps the branch. The final output includes links to the staging branch, commit, workflow run, and artifact.
 
