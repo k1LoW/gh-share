@@ -1,0 +1,34 @@
+name: Upload Artifact
+
+on:
+  push:
+    paths:
+      - 'gh-share-payload/**'
+
+jobs:
+  upload:
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read payload ref
+        run: |
+          PAYLOAD_DIR=$(awk '{print $1}' .gh-share-payload-ref)
+          PAYLOAD_TYPE=$(awk '{print $2}' .gh-share-payload-ref)
+          echo "PAYLOAD_DIR=$PAYLOAD_DIR" >> "$GITHUB_ENV"
+          echo "PAYLOAD_TYPE=$PAYLOAD_TYPE" >> "$GITHUB_ENV"
+      - name: Upload (file)
+        if: env.PAYLOAD_TYPE == 'file'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ github.sha }}
+          path: gh-share-payload/${{ env.PAYLOAD_DIR }}/
+          archive: false
+      - name: Upload (dir)
+        if: env.PAYLOAD_TYPE == 'dir'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ github.sha }}
+          path: gh-share-payload/${{ env.PAYLOAD_DIR }}/
+          archive: true
