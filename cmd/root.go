@@ -90,7 +90,7 @@ func share(ctx context.Context, input string) error {
 	if info.IsDir() {
 		kind = "dir"
 	}
-	files[".gh-share-payload-ref"] = []byte(ts + " " + kind + "\n")
+	files[".gh-share-payload-ref"] = []byte(ts + " " + kind + " " + filepath.Base(filepath.Clean(input)) + "\n")
 	if sharePersist && !marker {
 		files[".gh-share-persist"] = []byte("\n")
 	}

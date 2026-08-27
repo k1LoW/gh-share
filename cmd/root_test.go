@@ -47,7 +47,7 @@ func TestGitHubAPIEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create payload: %v", err)
 	}
-	files[".gh-share-payload-ref"] = []byte(ts + " file\n")
+	files[".gh-share-payload-ref"] = []byte(ts + " file report.html\n")
 
 	sha, err := commitPayload(ctx, c, owner, repo, branch, files, func(string) {})
 	if err != nil {
@@ -79,6 +79,13 @@ func TestGitHubAPIEndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(artifact, fmt.Sprintf("/runs/%d/artifacts/", run.GetID())) {
 		t.Fatalf("artifact URL = %q, want run ID %d", artifact, run.GetID())
+	}
+	artifacts, _, err := c.Actions.ListWorkflowRunArtifacts(ctx, owner, repo, run.GetID(), nil)
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
+	if len(artifacts.Artifacts) != 1 || artifacts.Artifacts[0].GetName() != "report.html" {
+		t.Fatalf("artifact name = %#v, want report.html", artifacts.Artifacts)
 	}
 }
 
