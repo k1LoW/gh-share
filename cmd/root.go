@@ -26,7 +26,7 @@ import (
 const defaultBranch = "gh-share-staging"
 
 var shareRepo, shareBranch string
-var shareOpen, sharePersist bool
+var shareOpen, sharePersist, shareJSON bool
 
 var rootCmd = func() *cobra.Command {
 	cmd := newShareCommand()
@@ -55,6 +55,7 @@ gh-share creates a temporary staging branch, commits the payload and an upload w
 	cmd.Flags().StringVar(&shareBranch, "branch", defaultBranch, "Staging branch name")
 	cmd.Flags().BoolVar(&shareOpen, "open", false, "Open the artifact URL in the browser")
 	cmd.Flags().BoolVar(&sharePersist, "persist", false, "Keep the staging branch after upload")
+	cmd.Flags().BoolVar(&shareJSON, "json", false, "Output upload details as JSON")
 	return cmd
 }
 
@@ -145,9 +146,37 @@ func share(ctx context.Context, input string) error {
 	if info.IsDir() {
 		uploadMessage = fmt.Sprintf("Successfully uploaded directory: %s", inputName)
 	}
-	s.FinalMSG = "\n" + uploadMessage + "\n\n" + formatSummary(branchURL, branchStatus, commitURL, runURL) + formatArtifactURL(url)
+	result := shareResult{
+		Input:         inputName,
+		InputType:     kind,
+		Repository:    fmt.Sprintf("https://github.com/%s/%s", owner, repo),
+		Branch:        branchURL,
+		BranchDeleted: !keep,
+		Commit:        commitURL,
+		Workflow:      runURL,
+		Artifact:      url,
+	}
+	if !shareJSON {
+		s.FinalMSG = "\n" + uploadMessage + "\n\n" + formatSummary(branchURL, branchStatus, commitURL, runURL) + formatArtifactURL(url)
+	}
 	s.Stop()
+	if shareJSON {
+		if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
+			return fmt.Errorf("encode JSON output: %w", err)
+		}
+	}
 	return nil
+}
+
+type shareResult struct {
+	Input         string `json:"input"`
+	InputType     string `json:"input_type"`
+	Repository    string `json:"repository"`
+	Branch        string `json:"branch"`
+	BranchDeleted bool   `json:"branch_deleted"`
+	Commit        string `json:"commit"`
+	Workflow      string `json:"workflow"`
+	Artifact      string `json:"artifact"`
 }
 
 func formatSummary(branchURL, branchStatus, commitURL, runURL string) string {
