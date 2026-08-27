@@ -23,10 +23,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const defaultBranch = "gh-share-staging"
+const (
+	defaultBranch = "gh-share-staging"
+	workflowFile  = "upload-gh-share-payload.yml"
+)
 
 var shareRepo, shareBranch string
-var shareOpen, sharePersist, shareJSON bool
+var shareOpen, sharePersist, shareJSON, sharePurge bool
 
 var rootCmd = func() *cobra.Command {
 	cmd := newShareCommand()
@@ -47,16 +50,105 @@ func newShareCommand() *cobra.Command {
 		Short: "Share a single HTML file or other files and directories through GitHub Actions artifacts",
 		Long: `Share a single HTML file or other files and directories using GitHub's built-in Git and Actions APIs.
 
-gh-share creates a temporary staging branch, commits the payload and an upload workflow, waits for GitHub Actions to upload the artifact, and removes the branch when finished.`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error { return share(cmd.Context(), args[0]) },
+gh-share creates a temporary staging branch, commits the payload and an upload workflow, waits for GitHub Actions to upload the artifact, and removes the branch when finished.
+
+Use --purge without an input path to delete gh-share workflow runs, their artifacts and logs, and associated staging branches.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if sharePurge {
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if sharePurge {
+				return purge(cmd.Context())
+			}
+			return share(cmd.Context(), args[0])
+		},
 	}
 	cmd.Flags().StringVar(&shareRepo, "repo", "", "Target repository (owner/repo; defaults to the current repository)")
 	cmd.Flags().StringVar(&shareBranch, "branch", defaultBranch, "Staging branch name")
 	cmd.Flags().BoolVar(&shareOpen, "open", false, "Open the artifact URL in the browser")
 	cmd.Flags().BoolVar(&sharePersist, "persist", false, "Keep the staging branch after upload")
 	cmd.Flags().BoolVar(&shareJSON, "json", false, "Output upload details as JSON")
+	cmd.Flags().BoolVar(&sharePurge, "purge", false, "Delete gh-share workflow runs, artifacts, and staging branches")
 	return cmd
+}
+
+func purge(ctx context.Context) error {
+	owner, repo, err := repository(ctx, shareRepo)
+	if err != nil {
+		return err
+	}
+	c, err := factory.NewGithubClient()
+	if err != nil {
+		return fmt.Errorf("create GitHub client: %w", err)
+	}
+
+	var runs []*github.WorkflowRun
+	for page := 1; ; page++ {
+		list, response, err := c.Actions.ListWorkflowRunsByFileName(ctx, owner, repo, workflowFile, &github.ListWorkflowRunsOptions{
+			ListOptions: github.ListOptions{Page: page, PerPage: 100},
+		})
+		if err != nil {
+			var apiErr *github.ErrorResponse
+			if errors.As(err, &apiErr) && apiErr.Response.StatusCode == 404 {
+				break
+			}
+			return fmt.Errorf("list gh-share workflow runs: %w", err)
+		}
+		runs = append(runs, list.WorkflowRuns...)
+		if response == nil || response.NextPage == 0 {
+			break
+		}
+	}
+
+	for _, run := range runs {
+		if run.GetStatus() != "completed" {
+			return fmt.Errorf("workflow run %d is still %s; cancel it and retry", run.GetID(), run.GetStatus())
+		}
+	}
+
+	branches := map[string]struct{}{}
+	for _, run := range runs {
+		if branch := run.GetHeadBranch(); branch != "" {
+			branches[branch] = struct{}{}
+		}
+	}
+	for _, run := range runs {
+		if _, err := c.Actions.DeleteWorkflowRun(ctx, owner, repo, run.GetID()); err != nil {
+			return fmt.Errorf("delete workflow run %d: %w", run.GetID(), err)
+		}
+	}
+
+	repositoryInfo, _, err := c.Repositories.Get(ctx, owner, repo)
+	if err != nil {
+		return fmt.Errorf("get repository: %w", err)
+	}
+	deletedBranches := 0
+	for branch := range branches {
+		if branch == repositoryInfo.GetDefaultBranch() {
+			continue
+		}
+		if _, err := c.Git.DeleteRef(ctx, owner, repo, "heads/"+branch); err != nil {
+			var apiErr *github.ErrorResponse
+			if errors.As(err, &apiErr) && (apiErr.Response.StatusCode == 404 || apiErr.Message == "Reference does not exist") {
+				continue
+			}
+			return fmt.Errorf("delete staging branch %s: %w", branch, err)
+		}
+		deletedBranches++
+	}
+
+	if shareJSON {
+		result := struct {
+			WorkflowRuns    int `json:"workflow_runs_deleted"`
+			StagingBranches int `json:"staging_branches_deleted"`
+		}{len(runs), deletedBranches}
+		return json.NewEncoder(os.Stdout).Encode(result)
+	}
+	fmt.Fprintf(os.Stderr, "Purged %d gh-share workflow run(s) and %d staging branch(es) from %s/%s.\n", len(runs), deletedBranches, owner, repo)
+	return nil
 }
 
 func share(ctx context.Context, input string) error {
@@ -406,7 +498,7 @@ func waitForRun(ctx context.Context, c *github.Client, owner, repo, sha string, 
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for {
-		runs, response, err := c.Actions.ListWorkflowRunsByFileName(ctx, owner, repo, "upload-gh-share-payload.yml", &github.ListWorkflowRunsOptions{Branch: shareBranch, ListOptions: github.ListOptions{PerPage: 10}})
+		runs, response, err := c.Actions.ListWorkflowRunsByFileName(ctx, owner, repo, workflowFile, &github.ListWorkflowRunsOptions{Branch: shareBranch, ListOptions: github.ListOptions{PerPage: 10}})
 		if err != nil {
 			var apiErr *github.ErrorResponse
 			if response == nil || response.StatusCode != 404 || !errors.As(err, &apiErr) {
