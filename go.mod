@@ -4,10 +4,10 @@ go 1.26.1
 
 require (
 	github.com/briandowns/spinner v1.23.2
-	github.com/fatih/color v1.7.0
+	github.com/fatih/color v1.19.0
 	github.com/google/go-github/v79 v79.0.0
 	github.com/k1LoW/go-github-client/v79 v79.0.22
-	github.com/mattn/go-colorable v0.1.13
+	github.com/mattn/go-colorable v0.1.14
 	github.com/spf13/cobra v1.10.2
 )
 
@@ -23,7 +23,7 @@ require (
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
-	golang.org/x/sys v0.31.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/term v0.30.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
