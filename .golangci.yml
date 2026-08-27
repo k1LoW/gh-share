@@ -1,0 +1,32 @@
+version: "2"
+run:
+  timeout: 2m
+linters:
+  enable:
+    - errorlint
+    - godot
+    - gosec
+    - misspell
+    - revive
+    - funcorder
+  settings:
+    errcheck:
+      check-type-assertions: true
+    misspell:
+      locale: US
+    revive:
+      rules:
+        - name: unexported-return
+          disabled: true
+        - name: exported
+          disabled: false
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+formatters:
+  exclusions:
+    generated: lax
