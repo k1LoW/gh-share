@@ -94,7 +94,7 @@ The staging branch is based on the repository's default branch, so the GitHub AP
 | `--json` | Output upload details as JSON. |
 | `--purge` | Delete gh-share workflow runs, artifacts, and staging branches instead of uploading. |
 
-`--purge` removes all completed runs of the embedded gh-share workflow in the target repository. The associated artifacts and logs are removed with the runs, and branches used by those runs are deleted except for the repository's default branch. Artifact URLs from the deleted runs will no longer work.
+`--purge` removes all completed runs of the embedded gh-share workflow in the target repository. The associated artifacts and logs are removed with the runs, and branches used by those runs are deleted except for the repository's default branch and branches containing `.gh-share-persist`. Artifact URLs from the deleted runs will no longer work.
 
 ## Installation
 

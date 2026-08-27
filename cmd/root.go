@@ -130,6 +130,13 @@ func purge(ctx context.Context) error {
 		if branch == repositoryInfo.GetDefaultBranch() {
 			continue
 		}
+		persist, err := hasPersistMarker(ctx, c, owner, repo, branch)
+		if err != nil {
+			return fmt.Errorf("check persist marker for staging branch %s: %w", branch, err)
+		}
+		if persist {
+			continue
+		}
 		if _, err := c.Git.DeleteRef(ctx, owner, repo, "heads/"+branch); err != nil {
 			var apiErr *github.ErrorResponse
 			if errors.As(err, &apiErr) && (apiErr.Response.StatusCode == 404 || apiErr.Message == "Reference does not exist") {
