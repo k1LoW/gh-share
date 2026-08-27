@@ -29,6 +29,9 @@ $ gh share --open pr123.html
 
 # Keep the staging branch after the upload
 $ gh share --persist pr123.html
+
+# Output upload details as JSON
+$ gh share --json pr123.html
 ```
 
 The primary use case is sharing a single-page HTML file. The command also supports arbitrary files and directories.
@@ -85,6 +88,7 @@ The staging branch is based on the repository's default branch, so the GitHub AP
 | `--branch` | Staging branch name. Defaults to `gh-share-staging`. |
 | `--open` | Open the artifact URL in the browser after the upload completes. |
 | `--persist` | Keep the staging branch after the upload. |
+| `--json` | Output upload details as JSON. |
 
 ## Installation
 
