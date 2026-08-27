@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -152,5 +153,33 @@ func TestFormatSummary(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("formatSummary() does not contain %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestConfirmPurge(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	ok, err := confirmPurge(strings.NewReader("yes\n"), &out, "k1LoW", "gh-share", 2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("confirmPurge() = false, want true")
+	}
+	if !strings.Contains(out.String(), "Purge 2 gh-share workflow run(s)") {
+		t.Fatalf("confirmation prompt = %q", out.String())
+	}
+
+	out.Reset()
+	ok, err = confirmPurge(strings.NewReader("n\n"), &out, "k1LoW", "gh-share", 2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("confirmPurge() = true, want false")
+	}
+	if !strings.Contains(out.String(), "Purge cancelled.") {
+		t.Fatalf("cancellation output = %q", out.String())
 	}
 }
