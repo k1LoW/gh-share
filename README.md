@@ -10,8 +10,7 @@ The upload is performed through the GitHub API. It does not use the local Git re
 - **Repository-based access control** — Shared HTML files and other artifacts follow the target repository's GitHub permissions and artifact access policies.
 - **No local Git operations** — The extension creates the staging branch and commit through the GitHub API without cloning, changing, or pushing the local repository.
 - **Works with files and directories** — Share a single HTML file, any other file, or a directory as one artifact.
-- **Automatic cleanup** — The temporary staging branch is deleted after a successful upload by default. Use `--persist` when you need to keep it.
-- **Traceable uploads** — The output links the staging branch, commit, workflow run, and artifact, making each upload easy to inspect.
+- **Automatic cleanup** — The temporary staging branch is deleted after a successful upload by default; use `--persist` when you need to keep it. Uploaded artifacts are then automatically removed according to the repository or organization's GitHub Actions retention policy, independently of staging branch retention.
 
 ## Usage
 
