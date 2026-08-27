@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.2.0](https://github.com/k1LoW/gh-share/compare/v0.1.2...v0.2.0) - 2026-08-27
+
+### New Features 🎉
+- feat: purge gh-share workflow history by @k1LoW in https://github.com/k1LoW/gh-share/pull/11
+
 ## [v0.1.2](https://github.com/k1LoW/gh-share/compare/v0.1.1...v0.1.2) - 2026-08-27
 
 ### New Features 🎉
