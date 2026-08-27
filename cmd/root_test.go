@@ -179,7 +179,7 @@ func TestConfirmPurge(t *testing.T) {
 	if ok {
 		t.Fatal("confirmPurge() = true, want false")
 	}
-	if !strings.Contains(out.String(), "Purge cancelled.") {
+	if !strings.Contains(out.String(), "Purge canceled.") {
 		t.Fatalf("cancellation output = %q", out.String())
 	}
 }

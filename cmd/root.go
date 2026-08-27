@@ -188,7 +188,7 @@ func confirmPurge(in io.Reader, out io.Writer, owner, repo string, workflowRuns,
 	}
 	answer = strings.ToLower(strings.TrimSpace(answer))
 	if answer != "y" && answer != "yes" {
-		fmt.Fprintln(out, "Purge cancelled.")
+		fmt.Fprintln(out, "Purge canceled.")
 		return false, nil
 	}
 	return true, nil
