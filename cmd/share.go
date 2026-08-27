@@ -225,45 +225,36 @@ func createOrphanCommit(ctx context.Context, c *github.Client, owner, repo, bran
 
 func createTree(ctx context.Context, c *github.Client, owner, repo, base string, files map[string][]byte) (*github.Tree, error) {
 	entries := make([]*github.TreeEntry, 0, len(files))
+	var err error
 	for path, data := range files {
 		blob, _, err := c.Git.CreateBlob(ctx, owner, repo, github.Blob{Content: github.String(base64.StdEncoding.EncodeToString(data)), Encoding: github.String("base64")})
 		if err != nil {
 			return nil, fmt.Errorf("create blob %s: %w", path, err)
 		}
+		if blob.GetSHA() == "" {
+			return nil, fmt.Errorf("create blob %s: GitHub returned no blob SHA", path)
+		}
 		entries = append(entries, &github.TreeEntry{Path: github.String(path), Mode: github.String("100644"), Type: github.String("blob"), SHA: blob.SHA})
 	}
-	// Use gh for this request. The v79 client serializes this endpoint in a
-	// form GitHub currently rejects, while gh sends the same API payload as the
-	// CLI's other repository operations.
-	body, err := json.Marshal(struct {
-		BaseTree string              `json:"base_tree,omitempty"`
-		Tree     []*github.TreeEntry `json:"tree"`
-	}{BaseTree: base, Tree: entries})
-	if err != nil {
-		return nil, fmt.Errorf("encode tree: %w", err)
+	var tree *github.Tree
+	for attempt := 0; attempt < 5; attempt++ {
+		var response *github.Response
+		tree, response, err = c.Git.CreateTree(ctx, owner, repo, base, entries)
+		if err == nil {
+			return tree, nil
+		}
+		var apiErr *github.ErrorResponse
+		if !errors.As(err, &apiErr) || response == nil || response.StatusCode != 404 || attempt == 4 {
+			return nil, fmt.Errorf("create tree (base %q, entries %d): %w", base, len(entries), err)
+		}
+		delay := time.Duration(1<<attempt) * time.Second
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
 	}
-	tmp, err := os.CreateTemp("", "gh-share-tree-*.json")
-	if err != nil {
-		return nil, fmt.Errorf("create tree request: %w", err)
-	}
-	name := tmp.Name()
-	defer os.Remove(name)
-	if _, err := tmp.Write(body); err != nil {
-		tmp.Close()
-		return nil, fmt.Errorf("write tree request: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return nil, fmt.Errorf("close tree request: %w", err)
-	}
-	out, err := exec.CommandContext(ctx, "gh", "api", "--method", "POST", "repos/"+owner+"/"+repo+"/git/trees", "--input", name).Output()
-	if err != nil {
-		return nil, fmt.Errorf("create tree: %w", err)
-	}
-	tree := new(github.Tree)
-	if err := json.Unmarshal(out, tree); err != nil {
-		return nil, fmt.Errorf("decode tree response: %w", err)
-	}
-	return tree, nil
+	return nil, errors.New("create tree: unreachable retry state")
 }
 
 func waitForRun(ctx context.Context, c *github.Client, owner, repo, sha string) (*github.WorkflowRun, error) {
