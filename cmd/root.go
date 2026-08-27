@@ -3,11 +3,9 @@ package cmd
 import (
 	"fmt"
 	"os"
-
-	"github.com/spf13/cobra"
 )
 
-var rootCmd = &cobra.Command{Use: "gh-share", Short: "Upload files to a repository-scoped GitHub Actions artifact"}
+var rootCmd = newShareCommand()
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
@@ -15,5 +13,3 @@ func Execute() {
 		os.Exit(1)
 	}
 }
-
-func init() { rootCmd.AddCommand(newShareCommand()) }
