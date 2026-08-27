@@ -32,6 +32,9 @@ $ gh share --persist pr123.html
 
 # Output upload details as JSON
 $ gh share --json pr123.html
+
+# Purge gh-share workflow runs, artifacts, and staging branches
+$ gh share --purge
 ```
 
 The primary use case is sharing a single-page HTML file. The command also supports arbitrary files and directories.
@@ -89,6 +92,9 @@ The staging branch is based on the repository's default branch, so the GitHub AP
 | `--open` | Open the artifact URL in the browser after the upload completes. |
 | `--persist` | Keep the staging branch after the upload. |
 | `--json` | Output upload details as JSON. |
+| `--purge` | Delete gh-share workflow runs, artifacts, and staging branches instead of uploading. |
+
+`--purge` removes all completed runs of the embedded gh-share workflow in the target repository. The associated artifacts and logs are removed with the runs, and branches used by those runs are deleted except for the repository's default branch. Artifact URLs from the deleted runs will no longer work.
 
 ## Installation
 
