@@ -181,12 +181,18 @@ func formatArtifactURL(url string) string {
 }
 
 func repository(ctx context.Context, selector string) (string, string, error) {
-	args := []string{"repo", "view", "--json", "owner,name"}
+	args := []string{"repo", "view"}
 	if selector != "" {
-		args = append(args, "--repo", selector)
+		args = append(args, selector)
 	}
-	out, err := exec.CommandContext(ctx, "gh", args...).Output()
+	args = append(args, "--json", "owner,name")
+	command := exec.CommandContext(ctx, "gh", args...)
+	out, err := command.Output()
 	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			return "", "", fmt.Errorf("resolve repository with gh: %s", strings.TrimSpace(string(exitErr.Stderr)))
+		}
 		return "", "", fmt.Errorf("resolve repository with gh: %w", err)
 	}
 	var v struct {
