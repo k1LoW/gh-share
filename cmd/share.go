@@ -193,7 +193,23 @@ func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch st
 
 func createOrphanCommit(ctx context.Context, c *github.Client, owner, repo, branch string, files map[string][]byte) (string, error) {
 	files[".github/workflows/upload-artifact.yml"] = uploadWorkflow
-	tree, err := createTree(ctx, c, owner, repo, "", files)
+	// GitHub's REST API rejects an empty base_tree for repositories whose tree
+	// has not been created through this API yet. Use the default branch tree as
+	// the tree base, while leaving the new commit parentless to preserve the
+	// orphan-branch design.
+	repository, _, err := c.Repositories.Get(ctx, owner, repo)
+	if err != nil {
+		return "", fmt.Errorf("get repository: %w", err)
+	}
+	ref, _, err := c.Git.GetRef(ctx, owner, repo, "heads/"+repository.GetDefaultBranch())
+	if err != nil {
+		return "", fmt.Errorf("get default branch: %w", err)
+	}
+	baseCommit, _, err := c.Git.GetCommit(ctx, owner, repo, ref.GetObject().GetSHA())
+	if err != nil {
+		return "", fmt.Errorf("get default branch commit: %w", err)
+	}
+	tree, err := createTree(ctx, c, owner, repo, baseCommit.GetTree().GetSHA(), files)
 	if err != nil {
 		return "", err
 	}
