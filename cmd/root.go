@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -61,7 +63,7 @@ Use --purge without an input path to delete gh-share workflow runs, their artifa
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if sharePurge {
-				return purge(cmd.Context())
+				return purge(cmd.Context(), cmd.InOrStdin(), cmd.ErrOrStderr())
 			}
 			return share(cmd.Context(), args[0])
 		},
@@ -75,7 +77,7 @@ Use --purge without an input path to delete gh-share workflow runs, their artifa
 	return cmd
 }
 
-func purge(ctx context.Context) error {
+func purge(ctx context.Context, in io.Reader, out io.Writer) error {
 	owner, repo, err := repository(ctx, shareRepo)
 	if err != nil {
 		return err
@@ -114,6 +116,26 @@ func purge(ctx context.Context) error {
 		if branch := run.GetHeadBranch(); branch != "" {
 			branches[branch] = struct{}{}
 		}
+	}
+	if len(runs) == 0 {
+		if shareJSON {
+			return json.NewEncoder(os.Stdout).Encode(struct {
+				WorkflowRuns    int `json:"workflow_runs_deleted"`
+				StagingBranches int `json:"staging_branches_deleted"`
+			}{})
+		}
+		fmt.Fprintf(out, "No gh-share workflow runs found in %s/%s.\n", owner, repo)
+		return nil
+	}
+	if ok, err := confirmPurge(in, out, owner, repo, len(runs), len(branches)); err != nil {
+		return err
+	} else if !ok {
+		if shareJSON {
+			return json.NewEncoder(os.Stdout).Encode(struct {
+				Purged bool `json:"purged"`
+			}{false})
+		}
+		return nil
 	}
 	for _, run := range runs {
 		if _, err := c.Actions.DeleteWorkflowRun(ctx, owner, repo, run.GetID()); err != nil {
@@ -156,6 +178,20 @@ func purge(ctx context.Context) error {
 	}
 	fmt.Fprintf(os.Stderr, "Purged %d gh-share workflow run(s) and %d staging branch(es) from %s/%s.\n", len(runs), deletedBranches, owner, repo)
 	return nil
+}
+
+func confirmPurge(in io.Reader, out io.Writer, owner, repo string, workflowRuns, branches int) (bool, error) {
+	fmt.Fprintf(out, "Purge %d gh-share workflow run(s) and up to %d staging branch(es) from %s/%s? [y/N] ", workflowRuns, branches, owner, repo)
+	answer, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("read purge confirmation: %w", err)
+	}
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	if answer != "y" && answer != "yes" {
+		fmt.Fprintln(out, "Purge canceled.")
+		return false, nil
+	}
+	return true, nil
 }
 
 func share(ctx context.Context, input string) error {
