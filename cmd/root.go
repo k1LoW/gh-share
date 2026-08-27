@@ -272,11 +272,7 @@ func payloadFiles(input string, dir bool, ts string) (map[string][]byte, error) 
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(input, path)
-		if err != nil {
-			return err
-		}
-		files[filepath.ToSlash(filepath.Join("gh-share-payload", ts, rel))] = data
+		files[filepath.ToSlash(filepath.Join("gh-share-payload", ts, path))] = data
 		return nil
 	})
 	if err != nil {
