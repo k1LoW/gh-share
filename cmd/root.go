@@ -14,9 +14,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/briandowns/spinner"
+	"github.com/fatih/color"
 	"github.com/google/go-github/v79/github"
 	"github.com/k1LoW/gh-share/version"
 	"github.com/k1LoW/go-github-client/v79/factory"
+	"github.com/mattn/go-colorable"
 	"github.com/spf13/cobra"
 )
 
@@ -68,6 +71,7 @@ func share(ctx context.Context, input string) error {
 		return err
 	}
 	keep := marker || sharePersist
+	target := fmt.Sprintf("%s/%s@%s", owner, repo, shareBranch)
 	ts := time.Now().UTC().Format("20060102-150405")
 	files, err := payloadFiles(input, info.IsDir(), ts)
 	if err != nil {
@@ -81,30 +85,99 @@ func share(ctx context.Context, input string) error {
 	if sharePersist && !marker {
 		files[".gh-share-persist"] = []byte("\n")
 	}
-	sha, err := commitPayload(ctx, c, owner, repo, shareBranch, files)
+
+	s := spinner.New(spinner.CharSets[11], 100*time.Millisecond, spinner.WithWriter(colorable.NewColorableStderr()))
+	_ = s.Color("fgCyan")
+	s.Suffix = " Preparing branch: " + target
+	s.Start()
+	defer s.Stop()
+
+	sha, err := commitPayload(ctx, c, owner, repo, shareBranch, files, func(message string) {
+		s.Suffix = " " + message + " (" + target + ")"
+	})
 	if err != nil {
 		return err
 	}
-	run, err := waitForRun(ctx, c, owner, repo, sha)
+	commitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", owner, repo, sha)
+	s.Suffix = " Starting workflow: " + commitURL
+	run, err := waitForRun(ctx, c, owner, repo, sha, func(message string) {
+		s.Suffix = " " + message
+	})
 	if err != nil {
 		return err
 	}
+	runURL := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d", owner, repo, run.GetID())
+	s.Suffix = " Workflow completed: " + runURL
+
+	s.Suffix = " Checking artifact: " + runURL
 	url, err := artifactURL(ctx, c, owner, repo, run.GetID())
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(os.Stdout, url)
 	if shareOpen {
 		if err := openURL(url); err != nil {
 			return fmt.Errorf("open artifact URL: %w", err)
 		}
 	}
 	if !keep {
+		s.Suffix = " Deleting branch: " + target
 		if _, err := c.Git.DeleteRef(ctx, owner, repo, "heads/"+shareBranch); err != nil {
 			return fmt.Errorf("delete staging branch: %w", err)
 		}
+	} else {
+		s.Suffix = " Keeping branch: " + target
 	}
+	branchStatus := "deleted"
+	if keep {
+		branchStatus = "kept"
+	}
+	branchURL := fmt.Sprintf("https://github.com/%s/%s/tree/%s", owner, repo, shareBranch)
+	inputName := filepath.Base(filepath.Clean(input))
+	uploadMessage := fmt.Sprintf("Successfully uploaded %s.", inputName)
+	if info.IsDir() {
+		uploadMessage = fmt.Sprintf("Successfully uploaded directory: %s", inputName)
+	}
+	s.FinalMSG = "\n" + uploadMessage + "\n\n" + formatSummary(branchURL, branchStatus, commitURL, runURL) + formatArtifactURL(url)
+	s.Stop()
 	return nil
+}
+
+func formatSummary(branchURL, branchStatus, commitURL, runURL string) string {
+	rows := []struct {
+		label string
+		value string
+	}{
+		{label: "Branch:   ", value: fmt.Sprintf("%s (%s)", branchURL, branchStatus)},
+		{label: "Commit:   ", value: commitURL},
+		{label: "Workflow: ", value: runURL},
+	}
+	width := 0
+	for _, row := range rows {
+		if length := len(row.label) + len(row.value); length > width {
+			width = length
+		}
+	}
+
+	var summary strings.Builder
+	borderStyle := color.New(color.FgCyan)
+	labelStyle := color.New(color.FgCyan, color.Bold)
+	valueStyle := color.New(color.FgWhite)
+	topBorder := "╔" + strings.Repeat("═", width+2) + "╗\n"
+	bottomBorder := "╚" + strings.Repeat("═", width+2) + "╝\n"
+	summary.WriteString(borderStyle.Sprint(topBorder))
+	for _, row := range rows {
+		padding := strings.Repeat(" ", width-len(row.label)-len(row.value))
+		fmt.Fprintf(&summary, "%s %s%s%s %s\n", borderStyle.Sprint("║"), labelStyle.Sprint(row.label), valueStyle.Sprint(row.value), padding, borderStyle.Sprint("║"))
+	}
+	summary.WriteString(borderStyle.Sprint(bottomBorder))
+	summary.WriteByte('\n')
+	return summary.String()
+}
+
+func formatArtifactURL(url string) string {
+	labelStyle := color.New(color.FgCyan, color.Bold)
+	valueStyle := color.New(color.FgWhite)
+	return fmt.Sprintf("%s\n%s\n\n", labelStyle.Sprint("Artifact URL:"), valueStyle.Sprint(url))
 }
 
 func repository(ctx context.Context, selector string) (string, string, error) {
@@ -182,7 +255,7 @@ func hasPersistMarker(ctx context.Context, c *github.Client, owner, repo, branch
 	return false, fmt.Errorf("check persist marker: %w", err)
 }
 
-func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch string, files map[string][]byte) (string, error) {
+func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch string, files map[string][]byte, progress func(string)) (string, error) {
 	ref, _, err := c.Git.GetRef(ctx, owner, repo, "heads/"+branch)
 	if err != nil {
 		var e *github.ErrorResponse
@@ -197,6 +270,7 @@ func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch st
 		if err != nil {
 			return "", fmt.Errorf("get default branch: %w", err)
 		}
+		progress("Creating branch")
 		if _, _, err = c.Git.CreateRef(ctx, owner, repo, github.CreateRef{Ref: "refs/heads/" + branch, SHA: base.GetObject().GetSHA()}); err != nil {
 			return "", fmt.Errorf("create staging branch: %w", err)
 		}
@@ -207,6 +281,7 @@ func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch st
 		return "", fmt.Errorf("get staging commit: %w", err)
 	}
 	files[".github/workflows/upload-gh-share-payload.yml"] = uploadWorkflow
+	progress("Committing")
 	tree, err := createTree(ctx, c, owner, repo, ref.GetObject().GetSHA(), files)
 	if err != nil {
 		return "", err
@@ -218,6 +293,7 @@ func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch st
 	if _, _, err = c.Git.UpdateRef(ctx, owner, repo, "heads/"+branch, github.UpdateRef{SHA: commit.GetSHA(), Force: new(true)}); err != nil {
 		return "", fmt.Errorf("update staging branch: %w", err)
 	}
+	progress(fmt.Sprintf("Committed: https://github.com/%s/%s/commit/%s", owner, repo, commit.GetSHA()))
 	return commit.GetSHA(), nil
 }
 
@@ -283,7 +359,7 @@ func buildTree(ctx context.Context, c *github.Client, owner, repo, base string, 
 	return tree, nil
 }
 
-func waitForRun(ctx context.Context, c *github.Client, owner, repo, sha string) (*github.WorkflowRun, error) {
+func waitForRun(ctx context.Context, c *github.Client, owner, repo, sha string, progress func(string)) (*github.WorkflowRun, error) {
 	deadline := time.NewTimer(15 * time.Minute)
 	defer deadline.Stop()
 	ticker := time.NewTicker(3 * time.Second)
@@ -301,6 +377,7 @@ func waitForRun(ctx context.Context, c *github.Client, owner, repo, sha string) 
 		}
 		for _, run := range runs.WorkflowRuns {
 			if run.GetHeadSHA() == sha {
+				progress(fmt.Sprintf("Workflow running: https://github.com/%s/%s/actions/runs/%d", owner, repo, run.GetID()))
 				if run.GetStatus() == "completed" {
 					if run.GetConclusion() != "success" {
 						return nil, fmt.Errorf("workflow failed with conclusion %s", run.GetConclusion())
