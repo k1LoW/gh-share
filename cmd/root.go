@@ -211,11 +211,11 @@ func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch st
 	if err != nil {
 		return "", err
 	}
-	commit, _, err := c.Git.CreateCommit(ctx, owner, repo, github.Commit{Message: github.Ptr("Share payload"), Tree: tree, Parents: []*github.Commit{baseCommit}}, nil)
+	commit, _, err := c.Git.CreateCommit(ctx, owner, repo, github.Commit{Message: new("Share payload"), Tree: tree, Parents: []*github.Commit{baseCommit}}, nil)
 	if err != nil {
 		return "", fmt.Errorf("create commit: %w", err)
 	}
-	if _, _, err = c.Git.UpdateRef(ctx, owner, repo, "heads/"+branch, github.UpdateRef{SHA: commit.GetSHA(), Force: github.Ptr(true)}); err != nil {
+	if _, _, err = c.Git.UpdateRef(ctx, owner, repo, "heads/"+branch, github.UpdateRef{SHA: commit.GetSHA(), Force: new(true)}); err != nil {
 		return "", fmt.Errorf("update staging branch: %w", err)
 	}
 	return commit.GetSHA(), nil
@@ -224,14 +224,14 @@ func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch st
 func createTree(ctx context.Context, c *github.Client, owner, repo, base string, files map[string][]byte) (*github.Tree, error) {
 	entries := make(map[string]*github.TreeEntry, len(files))
 	for path, data := range files {
-		blob, _, err := c.Git.CreateBlob(ctx, owner, repo, github.Blob{Content: github.Ptr(base64.StdEncoding.EncodeToString(data)), Encoding: github.Ptr("base64")})
+		blob, _, err := c.Git.CreateBlob(ctx, owner, repo, github.Blob{Content: new(base64.StdEncoding.EncodeToString(data)), Encoding: new("base64")})
 		if err != nil {
 			return nil, fmt.Errorf("create blob %s: %w", path, err)
 		}
 		if blob.GetSHA() == "" {
 			return nil, fmt.Errorf("create blob %s: GitHub returned no blob SHA", path)
 		}
-		entries[path] = &github.TreeEntry{Path: github.Ptr(path), Mode: github.Ptr("100644"), Type: github.Ptr("blob"), SHA: blob.SHA}
+		entries[path] = &github.TreeEntry{Path: new(path), Mode: new("100644"), Type: new("blob"), SHA: blob.SHA}
 	}
 	return buildTree(ctx, c, owner, repo, base, entries)
 }
@@ -251,7 +251,7 @@ func buildTree(ctx context.Context, c *github.Client, owner, repo, base string, 
 	for path, entry := range files {
 		parts := strings.SplitN(path, "/", 2)
 		if len(parts) == 1 {
-			entry.Path = github.Ptr(parts[0])
+			entry.Path = new(parts[0])
 			children[parts[0]] = map[string]*github.TreeEntry{"": entry}
 			continue
 		}
@@ -274,7 +274,7 @@ func buildTree(ctx context.Context, c *github.Client, owner, repo, base string, 
 		if err != nil {
 			return nil, err
 		}
-		entries = append(entries, &github.TreeEntry{Path: github.Ptr(name), Mode: github.Ptr("040000"), Type: github.Ptr("tree"), SHA: child.SHA})
+		entries = append(entries, &github.TreeEntry{Path: new(name), Mode: new("040000"), Type: new("tree"), SHA: child.SHA})
 	}
 	tree, _, err := c.Git.CreateTree(ctx, owner, repo, base, entries)
 	if err != nil {
