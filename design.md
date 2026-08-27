@@ -56,7 +56,7 @@ GitHub Actions workflow files on a branch are executed when that branch receives
 A staging branch (default: `gh-share-staging`, configurable via `--branch`) is used as a staging area. GitHub's REST Git API cannot point a ref at an unreachable parentless commit, so the initial staging commit is based on the default branch:
 
 - The default branch is never modified
-- Contains `.github/workflows/upload-artifact.yml`, `.gh-share-payload-ref`, and timestamped payload directories
+- Contains `.github/workflows/upload-gh-share-payload.yml`, `.gh-share-payload-ref`, and timestamped payload directories
 - **Default**: branch is deleted after the workflow run completes
 - **Persist mode**: branch is kept alive. `.gh-share-persist` exists on the branch as a marker. Subsequent runs that detect `.gh-share-persist` automatically keep the branch without requiring `--persist` again.
 - Because each upload lands in its own timestamped directory, all previously uploaded files remain on the branch when in persist mode.
@@ -95,7 +95,7 @@ gh share file.html
   |
   ├─ 1. Ensure staging branch exists
   |       If not: create branch from the default branch
-  |               add .github/workflows/upload-artifact.yml
+  |               add .github/workflows/upload-gh-share-payload.yml
   |               push
   |       If .gh-share-persist present on branch: treat as persist mode
   |
@@ -121,10 +121,10 @@ gh share file.html
 
 ### Workflow File (embedded in binary)
 
-`.github/workflows/upload-artifact.yml` placed on the staging branch. The workflow triggers on pushes to `.gh-share-payload-ref` (path filter) so it works regardless of the branch name chosen via `--branch`. It reads `.gh-share-payload-ref` to find the exact timestamped directory to upload:
+`.github/workflows/upload-gh-share-payload.yml` placed on the staging branch. Its name is `gh-share: Upload Payload`, making it clear that the workflow was created by gh-share. The workflow triggers on pushes to `.gh-share-payload-ref` (path filter) so it works regardless of the branch name chosen via `--branch`. It reads `.gh-share-payload-ref` to find the exact timestamped directory to upload:
 
 ```yaml
-name: Upload Artifact
+name: gh-share: Upload Payload
 
 on:
   push:
@@ -209,7 +209,7 @@ gh-share/
     artifact/
       artifact.go   -- artifact URL retrieval via API
   embed/
-    upload-artifact.yml   -- workflow file embedded via go:embed
+    upload-gh-share-payload.yml -- workflow file embedded via go:embed
 ```
 
 ### Installation

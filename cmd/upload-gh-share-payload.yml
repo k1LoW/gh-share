@@ -1,4 +1,4 @@
-name: Upload Artifact
+name: gh-share: Upload Payload
 
 on:
   push:

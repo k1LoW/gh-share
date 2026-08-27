@@ -187,7 +187,7 @@ func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch st
 	if err != nil {
 		return "", fmt.Errorf("get staging commit: %w", err)
 	}
-	files[".github/workflows/upload-artifact.yml"] = uploadWorkflow
+	files[".github/workflows/upload-gh-share-payload.yml"] = uploadWorkflow
 	tree, err := createTree(ctx, c, owner, repo, ref.GetObject().GetSHA(), files)
 	if err != nil {
 		return "", err
@@ -270,7 +270,7 @@ func waitForRun(ctx context.Context, c *github.Client, owner, repo, sha string) 
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for {
-		runs, response, err := c.Actions.ListWorkflowRunsByFileName(ctx, owner, repo, "upload-artifact.yml", &github.ListWorkflowRunsOptions{Branch: shareBranch, ListOptions: github.ListOptions{PerPage: 10}})
+		runs, response, err := c.Actions.ListWorkflowRunsByFileName(ctx, owner, repo, "upload-gh-share-payload.yml", &github.ListWorkflowRunsOptions{Branch: shareBranch, ListOptions: github.ListOptions{PerPage: 10}})
 		if err != nil {
 			var apiErr *github.ErrorResponse
 			if response == nil || response.StatusCode != 404 || !errors.As(err, &apiErr) {
