@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -164,31 +165,81 @@ func hasPersistMarker(ctx context.Context, c *github.Client, owner, repo, branch
 }
 
 func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch string, files map[string][]byte) (string, error) {
-	ref, _, err := c.Git.GetRef(ctx, owner, repo, "heads/"+branch)
+	_, _, err := c.Git.GetRef(ctx, owner, repo, "heads/"+branch)
 	if err != nil {
 		var e *github.ErrorResponse
 		if !errors.As(err, &e) || e.Response.StatusCode != 404 {
 			return "", fmt.Errorf("get staging branch: %w", err)
 		}
-		return createOrphanCommit(ctx, c, owner, repo, branch, files)
+		repository, _, err := c.Repositories.Get(ctx, owner, repo)
+		if err != nil {
+			return "", fmt.Errorf("get repository: %w", err)
+		}
+		base, _, err := c.Git.GetRef(ctx, owner, repo, "heads/"+repository.GetDefaultBranch())
+		if err != nil {
+			return "", fmt.Errorf("get default branch: %w", err)
+		}
+		if _, _, err = c.Git.CreateRef(ctx, owner, repo, github.CreateRef{Ref: "refs/heads/" + branch, SHA: base.GetObject().GetSHA()}); err != nil {
+			return "", fmt.Errorf("create staging branch: %w", err)
+		}
 	}
-	parent := ref.GetObject().GetSHA()
-	baseCommit, _, err := c.Git.GetCommit(ctx, owner, repo, parent)
+	files[".github/workflows/upload-artifact.yml"] = uploadWorkflow
+	paths := make([]string, 0, len(files))
+	for path := range files {
+		paths = append(paths, path)
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		priority := func(path string) int {
+			if path == ".gh-share-payload-ref" {
+				return 2
+			}
+			if path == ".github/workflows/upload-artifact.yml" {
+				return 1
+			}
+			return 0
+		}
+		pi, pj := priority(paths[i]), priority(paths[j])
+		if pi != pj {
+			return pi < pj
+		}
+		return paths[i] < paths[j]
+	})
+	var last *github.RepositoryContentResponse
+	for _, path := range paths {
+		last, err = upsertFile(ctx, c, owner, repo, branch, path, files[path])
+		if err != nil {
+			return "", err
+		}
+	}
+	if last == nil || last.Commit.GetSHA() == "" {
+		return "", errors.New("file commit did not return a commit SHA")
+	}
+	return last.Commit.GetSHA(), nil
+}
+
+func upsertFile(ctx context.Context, c *github.Client, owner, repo, branch, path string, content []byte) (*github.RepositoryContentResponse, error) {
+	options := &github.RepositoryContentFileOptions{Message: github.String("Share payload"), Content: content, Branch: github.String(branch)}
+	existing, _, _, err := c.Repositories.GetContents(ctx, owner, repo, path, &github.RepositoryContentGetOptions{Ref: branch})
+	if err == nil {
+		if existing == nil || existing.GetSHA() == "" {
+			return nil, fmt.Errorf("get existing file %s: missing SHA", path)
+		}
+		options.SHA = github.String(existing.GetSHA())
+		result, _, err := c.Repositories.UpdateFile(ctx, owner, repo, path, options)
+		if err != nil {
+			return nil, fmt.Errorf("update file %s: %w", path, err)
+		}
+		return result, nil
+	}
+	var apiErr *github.ErrorResponse
+	if !errors.As(err, &apiErr) || apiErr.Response.StatusCode != 404 {
+		return nil, fmt.Errorf("check file %s: %w", path, err)
+	}
+	result, _, err := c.Repositories.CreateFile(ctx, owner, repo, path, options)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("create file %s: %w", path, err)
 	}
-	tree, err := createTree(ctx, c, owner, repo, baseCommit.GetTree().GetSHA(), files)
-	if err != nil {
-		return "", err
-	}
-	commit, _, err := c.Git.CreateCommit(ctx, owner, repo, github.Commit{Message: github.String("Share payload"), Tree: tree, Parents: []*github.Commit{{SHA: github.String(parent)}}}, nil)
-	if err != nil {
-		return "", fmt.Errorf("create commit: %w", err)
-	}
-	if _, _, err = c.Git.UpdateRef(ctx, owner, repo, "heads/"+branch, github.UpdateRef{SHA: commit.GetSHA()}); err != nil {
-		return "", fmt.Errorf("update staging branch: %w", err)
-	}
-	return commit.GetSHA(), nil
+	return result, nil
 }
 
 func createOrphanCommit(ctx context.Context, c *github.Client, owner, repo, branch string, files map[string][]byte) (string, error) {
@@ -209,23 +260,31 @@ func createOrphanCommit(ctx context.Context, c *github.Client, owner, repo, bran
 	if err != nil {
 		return "", fmt.Errorf("get default branch commit: %w", err)
 	}
-	tree, err := createTree(ctx, c, owner, repo, baseCommit.GetTree().GetSHA(), files)
-	if err != nil {
-		return "", err
-	}
-	commit, _, err := c.Git.CreateCommit(ctx, owner, repo, github.Commit{Message: github.String("Initialize gh-share staging branch"), Tree: tree}, nil)
-	if err != nil {
-		return "", err
-	}
-	if _, _, err = c.Git.CreateRef(ctx, owner, repo, github.CreateRef{Ref: "refs/heads/" + branch, SHA: commit.GetSHA()}); err != nil {
+	// Seed the staging ref at a reachable commit. GitHub's REST API cannot
+	// update a ref to a parentless commit, so the initial staging commit keeps
+	// the default branch commit as its parent.
+	if _, _, err = c.Git.CreateRef(ctx, owner, repo, github.CreateRef{Ref: "refs/heads/" + branch, SHA: ref.GetObject().GetSHA()}); err != nil {
 		return "", fmt.Errorf("create staging branch: %w", err)
+	}
+	tree, err := createTree(ctx, c, owner, repo, ref.GetObject().GetSHA(), files)
+	if err != nil {
+		_, _ = c.Git.DeleteRef(ctx, owner, repo, "heads/"+branch)
+		return "", err
+	}
+	commit, _, err := c.Git.CreateCommit(ctx, owner, repo, github.Commit{Message: github.String("Initialize gh-share staging branch"), Tree: tree, Parents: []*github.Commit{baseCommit}}, nil)
+	if err != nil {
+		_, _ = c.Git.DeleteRef(ctx, owner, repo, "heads/"+branch)
+		return "", err
+	}
+	if _, _, err = c.Git.UpdateRef(ctx, owner, repo, "heads/"+branch, github.UpdateRef{SHA: commit.GetSHA(), Force: github.Bool(true)}); err != nil {
+		_, _ = c.Git.DeleteRef(ctx, owner, repo, "heads/"+branch)
+		return "", fmt.Errorf("update staging branch to %s: %w", commit.GetSHA(), err)
 	}
 	return commit.GetSHA(), nil
 }
 
 func createTree(ctx context.Context, c *github.Client, owner, repo, base string, files map[string][]byte) (*github.Tree, error) {
-	entries := make([]*github.TreeEntry, 0, len(files))
-	var err error
+	entries := make(map[string]*github.TreeEntry, len(files))
 	for path, data := range files {
 		blob, _, err := c.Git.CreateBlob(ctx, owner, repo, github.Blob{Content: github.String(base64.StdEncoding.EncodeToString(data)), Encoding: github.String("base64")})
 		if err != nil {
@@ -234,27 +293,56 @@ func createTree(ctx context.Context, c *github.Client, owner, repo, base string,
 		if blob.GetSHA() == "" {
 			return nil, fmt.Errorf("create blob %s: GitHub returned no blob SHA", path)
 		}
-		entries = append(entries, &github.TreeEntry{Path: github.String(path), Mode: github.String("100644"), Type: github.String("blob"), SHA: blob.SHA})
+		entries[path] = &github.TreeEntry{Path: github.String(path), Mode: github.String("100644"), Type: github.String("blob"), SHA: blob.SHA}
 	}
-	var tree *github.Tree
-	for attempt := 0; attempt < 5; attempt++ {
-		var response *github.Response
-		tree, response, err = c.Git.CreateTree(ctx, owner, repo, base, entries)
-		if err == nil {
-			return tree, nil
+	return buildTree(ctx, c, owner, repo, base, entries)
+}
+
+func buildTree(ctx context.Context, c *github.Client, owner, repo, base string, files map[string]*github.TreeEntry) (*github.Tree, error) {
+	baseEntries := map[string]*github.TreeEntry{}
+	if base != "" {
+		old, _, err := c.Git.GetTree(ctx, owner, repo, base, false)
+		if err != nil {
+			return nil, fmt.Errorf("get base tree: %w", err)
 		}
-		var apiErr *github.ErrorResponse
-		if !errors.As(err, &apiErr) || response == nil || response.StatusCode != 404 || attempt == 4 {
-			return nil, fmt.Errorf("create tree (base %q, entries %d): %w", base, len(entries), err)
-		}
-		delay := time.Duration(1<<attempt) * time.Second
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(delay):
+		for i := range old.Entries {
+			baseEntries[old.Entries[i].GetPath()] = old.Entries[i]
 		}
 	}
-	return nil, errors.New("create tree: unreachable retry state")
+	children := map[string]map[string]*github.TreeEntry{}
+	for path, entry := range files {
+		parts := strings.SplitN(path, "/", 2)
+		if len(parts) == 1 {
+			entry.Path = github.String(parts[0])
+			children[parts[0]] = map[string]*github.TreeEntry{"": entry}
+			continue
+		}
+		if children[parts[0]] == nil {
+			children[parts[0]] = map[string]*github.TreeEntry{}
+		}
+		children[parts[0]][strings.TrimPrefix(path, parts[0]+"/")] = entry
+	}
+	entries := make([]*github.TreeEntry, 0, len(children))
+	for name, group := range children {
+		if direct, ok := group[""]; ok {
+			entries = append(entries, direct)
+			continue
+		}
+		childBase := ""
+		if old := baseEntries[name]; old != nil && old.GetType() == "tree" {
+			childBase = old.GetSHA()
+		}
+		child, err := buildTree(ctx, c, owner, repo, childBase, group)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, &github.TreeEntry{Path: github.String(name), Mode: github.String("040000"), Type: github.String("tree"), SHA: child.SHA})
+	}
+	tree, _, err := c.Git.CreateTree(ctx, owner, repo, base, entries)
+	if err != nil {
+		return nil, fmt.Errorf("create tree (base %q, entries %d): %w", base, len(entries), err)
+	}
+	return tree, nil
 }
 
 func waitForRun(ctx context.Context, c *github.Client, owner, repo, sha string) (*github.WorkflowRun, error) {
@@ -263,9 +351,15 @@ func waitForRun(ctx context.Context, c *github.Client, owner, repo, sha string) 
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for {
-		runs, _, err := c.Actions.ListWorkflowRunsByFileName(ctx, owner, repo, "upload-artifact.yml", &github.ListWorkflowRunsOptions{Branch: shareBranch, ListOptions: github.ListOptions{PerPage: 10}})
+		runs, response, err := c.Actions.ListWorkflowRunsByFileName(ctx, owner, repo, "upload-artifact.yml", &github.ListWorkflowRunsOptions{Branch: shareBranch, ListOptions: github.ListOptions{PerPage: 10}})
 		if err != nil {
-			return nil, err
+			var apiErr *github.ErrorResponse
+			if response == nil || response.StatusCode != 404 || !errors.As(err, &apiErr) {
+				return nil, err
+			}
+		}
+		if runs == nil {
+			runs = &github.WorkflowRuns{}
 		}
 		for _, run := range runs.WorkflowRuns {
 			if run.GetHeadSHA() == sha {

@@ -49,13 +49,13 @@ gh share report.html --branch my-previews --persist
 
 ### Key Insight
 
-GitHub Actions workflow files on a branch are executed when that branch receives a push event — even if the branch is not the default branch. This means a self-contained orphan branch (`gh-share-staging`) can hold both the workflow file and the uploaded content, without touching main.
+GitHub Actions workflow files on a branch are executed when that branch receives a push event — even if the branch is not the default branch. The extension creates a temporary staging branch from the default branch, then commits the workflow and payload without touching the default branch.
 
 ### Branch Strategy
 
-A staging orphan branch (default: `gh-share-staging`, configurable via `--branch`) is used as a staging area:
+A staging branch (default: `gh-share-staging`, configurable via `--branch`) is used as a staging area. GitHub's REST Git API cannot point a ref at an unreachable parentless commit, so the initial staging commit is based on the default branch:
 
-- Completely disconnected from main branch history
+- The default branch is never modified
 - Contains `.github/workflows/upload-artifact.yml`, `.gh-share-payload-ref`, and timestamped payload directories
 - **Default**: branch is deleted after the workflow run completes
 - **Persist mode**: branch is kept alive. `.gh-share-persist` exists on the branch as a marker. Subsequent runs that detect `.gh-share-persist` automatically keep the branch without requiring `--persist` again.
@@ -94,7 +94,7 @@ gh-share-payload/
 gh share file.html
   |
   ├─ 1. Ensure staging branch exists
-  |       If not: create orphan branch
+  |       If not: create branch from the default branch
   |               add .github/workflows/upload-artifact.yml
   |               push
   |       If .gh-share-persist present on branch: treat as persist mode
@@ -121,7 +121,7 @@ gh share file.html
 
 ### Workflow File (embedded in binary)
 
-`.github/workflows/upload-artifact.yml` placed on the staging branch. The workflow triggers on pushes to `gh-share-payload/**` (path filter) so it works regardless of the branch name chosen via `--branch`. It reads `.gh-share-payload-ref` to find the exact timestamped directory to upload:
+`.github/workflows/upload-artifact.yml` placed on the staging branch. The workflow triggers on pushes to `.gh-share-payload-ref` (path filter) so it works regardless of the branch name chosen via `--branch`. It reads `.gh-share-payload-ref` to find the exact timestamped directory to upload:
 
 ```yaml
 name: Upload Artifact
@@ -129,7 +129,7 @@ name: Upload Artifact
 on:
   push:
     paths:
-      - 'gh-share-payload/**'
+      - '.gh-share-payload-ref'
 
 jobs:
   upload:
@@ -203,7 +203,7 @@ gh-share/
     share.go        -- main share logic
   internal/
     branch/
-      branch.go     -- orphan branch setup, persist detection, force push vs regular commit
+      branch.go     -- staging branch setup and persist detection
     workflow/
       workflow.go   -- embedded workflow YAML, run polling
     artifact/
