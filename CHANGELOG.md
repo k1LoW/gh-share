@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.4.0](https://github.com/k1LoW/gh-share/compare/v0.3.0...v0.4.0) - 2026-08-28
+
+### New Features 🎉
+- feat: reshare a payload already on the staging branch by @k1LoW in https://github.com/k1LoW/gh-share/pull/19
+
 ## [v0.3.0](https://github.com/k1LoW/gh-share/compare/v0.2.1...v0.3.0) - 2026-08-28
 
 ### Breaking Changes 🛠
