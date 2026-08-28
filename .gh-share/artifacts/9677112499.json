@@ -1,0 +1,10 @@
+{
+  "artifact_url": "https://github.com/k1LoW/gh-share/actions/runs/33149501404/artifacts/9677112499",
+  "artifact_id": 9677112499,
+  "run_id": 33149501404,
+  "commit": "cd0a587b693c76737b54c36e67afb9cf83f6d098",
+  "payload_dir": ".gh-share/payloads/20260828-065346",
+  "input": "report.html",
+  "input_type": "file",
+  "created_at": "2026-08-28T06:54:06Z"
+}
