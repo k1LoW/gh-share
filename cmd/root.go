@@ -87,12 +87,18 @@ func purge(ctx context.Context, in io.Reader, out io.Writer) error {
 		return fmt.Errorf("create GitHub client: %w", err)
 	}
 
+	s := spinner.New(spinner.CharSets[11], 100*time.Millisecond, spinner.WithWriter(colorable.NewColorableStderr()))
+	_ = s.Color("fgCyan")
+	s.Suffix = " Finding gh-share workflow runs"
+	s.Start()
 	var runs []*github.WorkflowRun
 	for page := 1; ; page++ {
+		s.Suffix = fmt.Sprintf(" Finding gh-share workflow runs (page %d)", page)
 		list, response, err := c.Actions.ListWorkflowRunsByFileName(ctx, owner, repo, workflowFile, &github.ListWorkflowRunsOptions{
 			ListOptions: github.ListOptions{Page: page, PerPage: 100},
 		})
 		if err != nil {
+			s.Stop()
 			var apiErr *github.ErrorResponse
 			if errors.As(err, &apiErr) && apiErr.Response.StatusCode == 404 {
 				break
@@ -104,6 +110,7 @@ func purge(ctx context.Context, in io.Reader, out io.Writer) error {
 			break
 		}
 	}
+	s.Stop()
 
 	for _, run := range runs {
 		if run.GetStatus() != "completed" {
@@ -127,6 +134,7 @@ func purge(ctx context.Context, in io.Reader, out io.Writer) error {
 		fmt.Fprintf(out, "No gh-share workflow runs found in %s/%s.\n", owner, repo)
 		return nil
 	}
+
 	if ok, err := confirmPurge(in, out, owner, repo, len(runs), len(branches)); err != nil {
 		return err
 	} else if !ok {
@@ -137,7 +145,12 @@ func purge(ctx context.Context, in io.Reader, out io.Writer) error {
 		}
 		return nil
 	}
-	for _, run := range runs {
+	s = spinner.New(spinner.CharSets[11], 100*time.Millisecond, spinner.WithWriter(colorable.NewColorableStderr()))
+	_ = s.Color("fgCyan")
+	s.Start()
+	defer s.Stop()
+	for i, run := range runs {
+		s.Suffix = fmt.Sprintf(" Deleting workflow runs (%d/%d)", i+1, len(runs))
 		if _, err := c.Actions.DeleteWorkflowRun(ctx, owner, repo, run.GetID()); err != nil {
 			return fmt.Errorf("delete workflow run %d: %w", run.GetID(), err)
 		}
@@ -148,7 +161,10 @@ func purge(ctx context.Context, in io.Reader, out io.Writer) error {
 		return fmt.Errorf("get repository: %w", err)
 	}
 	deletedBranches := 0
+	processedBranches := 0
 	for branch := range branches {
+		processedBranches++
+		s.Suffix = fmt.Sprintf(" Checking staging branches (%d/%d)", processedBranches, len(branches))
 		if branch == repositoryInfo.GetDefaultBranch() {
 			continue
 		}
@@ -168,6 +184,7 @@ func purge(ctx context.Context, in io.Reader, out io.Writer) error {
 		}
 		deletedBranches++
 	}
+	s.FinalMSG = fmt.Sprintf("\nPurged %d gh-share workflow run(s) and %d staging branch(es) from %s/%s.\n", len(runs), deletedBranches, owner, repo)
 
 	if shareJSON {
 		result := struct {
@@ -176,7 +193,6 @@ func purge(ctx context.Context, in io.Reader, out io.Writer) error {
 		}{len(runs), deletedBranches}
 		return json.NewEncoder(os.Stdout).Encode(result)
 	}
-	fmt.Fprintf(os.Stderr, "Purged %d gh-share workflow run(s) and %d staging branch(es) from %s/%s.\n", len(runs), deletedBranches, owner, repo)
 	return nil
 }
 
