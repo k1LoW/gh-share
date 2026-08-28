@@ -3,7 +3,9 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,8 +13,10 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,7 +47,7 @@ const (
 )
 
 var shareRepo, shareBranch string
-var shareOpen, sharePersist, shareJSON, sharePurge bool
+var shareOpen, sharePersist, shareJSON, sharePurge, shareReshare bool
 
 var rootCmd = func() *cobra.Command {
 	cmd := newShareCommand()
@@ -60,24 +64,34 @@ func Execute() {
 
 func newShareCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "share <file|dir>",
+		Use:   "share <file|dir|artifact>",
 		Short: "Share a single HTML file or other files and directories through GitHub Actions artifacts",
 		Long: `Share a single HTML file or other files and directories using GitHub's built-in Git and Actions APIs.
 
 gh-share creates a temporary staging branch, commits the payload and an upload workflow, waits for GitHub Actions to upload the artifact, and removes the branch when finished.
 
+Use --reshare with an artifact URL or ID to upload a payload already stored on the staging branch again. Artifacts expire while the staging branch does not, so this hands out a fresh artifact URL without the payload ever leaving the repository.
+
 Use --purge without an input path to delete gh-share workflow runs, their artifacts and logs, and associated staging branches.`,
 		Args: func(cmd *cobra.Command, args []string) error {
-			if sharePurge {
+			// --reshare takes an argument even alongside --purge, so that the two
+			// report as a conflicting pair rather than as a stray argument.
+			if sharePurge && !shareReshare {
 				return cobra.NoArgs(cmd, args)
 			}
 			return cobra.ExactArgs(1)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if sharePurge {
+			switch {
+			case sharePurge && shareReshare:
+				return errors.New("--purge and --reshare cannot be combined")
+			case sharePurge:
 				return purge(cmd.Context(), cmd.InOrStdin(), cmd.ErrOrStderr())
+			case shareReshare:
+				return reshare(cmd.Context(), args[0])
+			default:
+				return share(cmd.Context(), args[0])
 			}
-			return share(cmd.Context(), args[0])
 		},
 	}
 	cmd.Flags().StringVar(&shareRepo, "repo", "", "Target repository (owner/repo; defaults to the current repository)")
@@ -85,6 +99,7 @@ Use --purge without an input path to delete gh-share workflow runs, their artifa
 	cmd.Flags().BoolVar(&shareOpen, "open", false, "Open the artifact URL in the browser")
 	cmd.Flags().BoolVar(&sharePersist, "persist", false, "Keep the staging branch after upload")
 	cmd.Flags().BoolVar(&shareJSON, "json", false, "Output upload details as JSON")
+	cmd.Flags().BoolVar(&shareReshare, "reshare", false, "Re-upload the payload behind an artifact URL or ID kept on the staging branch")
 	cmd.Flags().BoolVar(&sharePurge, "purge", false, "Delete gh-share workflow runs, artifacts, and staging branches")
 	return cmd
 }
@@ -245,7 +260,7 @@ func share(ctx context.Context, input string) error {
 		kind = "dir"
 	}
 	name := filepath.Base(filepath.Clean(input))
-	files[payloadRefPath] = []byte(ts + " " + kind + " " + name + "\n")
+	files[payloadRefPath] = payloadRef(shareID(), ts, kind, name)
 	if sharePersist {
 		// Written unconditionally so a branch still marked by the pre-.gh-share/
 		// path picks up the current one. Rewriting identical content reuses the
@@ -258,6 +273,51 @@ func share(ctx context.Context, input string) error {
 		name:       name,
 		kind:       kind,
 		keep:       marker || sharePersist,
+		action:     "uploaded",
+	})
+}
+
+// reshare uploads a payload that is already on the staging branch, so the input
+// never leaves the repository. Because it also records the new artifact, the URL
+// it prints can itself be reshared, without limit.
+func reshare(ctx context.Context, ref string) error {
+	artifactID, err := parseArtifactRef(ref)
+	if err != nil {
+		return err
+	}
+	c, owner, repo, err := prepare(ctx)
+	if err != nil {
+		return err
+	}
+	record, err := readArtifactRecord(ctx, c, owner, repo, shareBranch, artifactID)
+	if err != nil {
+		return err
+	}
+	// Checked before committing, because a missing payload directory would only
+	// surface as a failed workflow run that uploaded nothing.
+	found, err := branchContains(ctx, c, owner, repo, shareBranch, record.PayloadDir)
+	if err != nil {
+		return fmt.Errorf("check payload directory: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("payload directory %s is no longer on branch %s", record.PayloadDir, shareBranch)
+	}
+	files := map[string][]byte{
+		payloadRefPath: payloadRef(shareID(), path.Base(record.PayloadDir), record.InputType, record.Input),
+	}
+	if sharePersist {
+		files[persistPath] = []byte("\n")
+	}
+	return upload(ctx, c, owner, repo, payloadPlan{
+		files:      files,
+		payloadDir: record.PayloadDir,
+		name:       record.Input,
+		kind:       record.InputType,
+		// Deleting the branch would throw away the only copy of what was just
+		// shared, and end the chain of reshares at this artifact.
+		keep:         true,
+		action:       "re-uploaded",
+		resharedFrom: artifactID,
 	})
 }
 
@@ -277,13 +337,15 @@ func prepare(ctx context.Context) (*github.Client, string, string, error) {
 }
 
 // payloadPlan is what a share commits to the staging branch and what the result
-// describes, so that uploading does not depend on how the payload was assembled.
+// describes, so a fresh share and a reshare differ only in how the plan is built.
 type payloadPlan struct {
-	files      map[string][]byte
-	payloadDir string
-	name       string
-	kind       string
-	keep       bool
+	files        map[string][]byte
+	payloadDir   string
+	name         string
+	kind         string
+	keep         bool
+	action       string
+	resharedFrom int64
 }
 
 func upload(ctx context.Context, c *github.Client, owner, repo string, plan payloadPlan) error {
@@ -321,14 +383,15 @@ func upload(ctx context.Context, c *github.Client, owner, repo string, plan payl
 	if plan.keep {
 		s.Suffix = " Recording artifact: " + target
 		record := artifactRecord{
-			ArtifactURL: url,
-			ArtifactID:  artifact.GetID(),
-			RunID:       run.GetID(),
-			Commit:      sha,
-			PayloadDir:  plan.payloadDir,
-			Input:       plan.name,
-			InputType:   plan.kind,
-			CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+			ArtifactURL:  url,
+			ArtifactID:   artifact.GetID(),
+			RunID:        run.GetID(),
+			Commit:       sha,
+			PayloadDir:   plan.payloadDir,
+			Input:        plan.name,
+			InputType:    plan.kind,
+			ResharedFrom: plan.resharedFrom,
+			CreatedAt:    time.Now().UTC().Format(time.RFC3339),
 		}
 		if err := recordArtifact(ctx, c, owner, repo, shareBranch, record); err != nil {
 			// The upload already succeeded, so the URL must survive the error or
@@ -354,9 +417,9 @@ func upload(ctx context.Context, c *github.Client, owner, repo string, plan payl
 		branchStatus = "kept"
 	}
 	branchURL := fmt.Sprintf("https://github.com/%s/%s/tree/%s", owner, repo, shareBranch)
-	uploadMessage := fmt.Sprintf("Successfully uploaded %s.", plan.name)
+	uploadMessage := fmt.Sprintf("Successfully %s %s.", plan.action, plan.name)
 	if plan.kind == "dir" {
-		uploadMessage = fmt.Sprintf("Successfully uploaded directory: %s", plan.name)
+		uploadMessage = fmt.Sprintf("Successfully %s directory: %s", plan.action, plan.name)
 	}
 	result := shareResult{
 		Input:         plan.name,
@@ -685,11 +748,77 @@ type artifactRecord struct {
 	PayloadDir  string `json:"payload_dir"`
 	Input       string `json:"input"`
 	InputType   string `json:"input_type"`
-	CreatedAt   string `json:"created_at"`
+	// ResharedFrom is the artifact this one was made from, so a chain of reshares
+	// of one payload can be walked back to the share that first uploaded it.
+	ResharedFrom int64  `json:"reshared_from,omitempty"`
+	CreatedAt    string `json:"created_at"`
 }
 
 func artifactRecordPath(artifactID int64) string {
 	return fmt.Sprintf("%s/%d.json", artifactsDir, artifactID)
+}
+
+// payloadRef renders the line the upload workflow reads. The share ID leads the
+// line and changes on every share, so re-sharing an unchanged payload still
+// rewrites the one file the workflow's push paths filter watches.
+func payloadRef(shareID, dir, kind, name string) []byte {
+	return []byte(shareID + " " + dir + " " + kind + " " + name + "\n")
+}
+
+// shareID ends in random bits rather than a finer timestamp because the clock
+// resolution is only microseconds on some platforms. Two reshares of one payload
+// that share an ID render an identical payload ref, which leaves the command
+// waiting out its timeout on a workflow run that never starts.
+func shareID() string {
+	buf := make([]byte, 8)
+	// crypto/rand.Read panics rather than reporting failure, so there is no error
+	// worth surfacing from a value that only has to differ from the last one.
+	_, _ = rand.Read(buf)
+	return time.Now().UTC().Format("20060102-150405") + "-" + hex.EncodeToString(buf)
+}
+
+// parseArtifactRef accepts what a previous share printed, which is the artifact
+// URL, as well as the bare ID at the end of it.
+func parseArtifactRef(ref string) (int64, error) {
+	trimmed := strings.TrimSuffix(strings.TrimSpace(ref), "/")
+	if i := strings.LastIndex(trimmed, "/"); i >= 0 {
+		trimmed = trimmed[i+1:]
+	}
+	id, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("invalid artifact reference %q; pass an artifact URL or ID", ref)
+	}
+	return id, nil
+}
+
+func readArtifactRecord(ctx context.Context, c *github.Client, owner, repo, branch string, artifactID int64) (*artifactRecord, error) {
+	recordPath := artifactRecordPath(artifactID)
+	content, _, _, err := c.Repositories.GetContents(ctx, owner, repo, recordPath, &github.RepositoryContentGetOptions{Ref: branch})
+	if err != nil {
+		var e *github.ErrorResponse
+		if errors.As(err, &e) && (e.Response.StatusCode == 404 || e.Response.StatusCode == 409) {
+			return nil, fmt.Errorf("no record for artifact %d on branch %s; only artifacts shared with a kept staging branch can be reshared", artifactID, branch)
+		}
+		return nil, fmt.Errorf("read artifact record: %w", err)
+	}
+	if content == nil {
+		return nil, fmt.Errorf("%s is not a file", recordPath)
+	}
+	raw, err := content.GetContent()
+	if err != nil {
+		return nil, fmt.Errorf("decode artifact record %s: %w", recordPath, err)
+	}
+	var record artifactRecord
+	if err := json.Unmarshal([]byte(raw), &record); err != nil {
+		return nil, fmt.Errorf("parse artifact record %s: %w", recordPath, err)
+	}
+	if record.PayloadDir == "" || record.Input == "" {
+		return nil, fmt.Errorf("artifact record %s does not name the payload it was made from", recordPath)
+	}
+	if record.InputType != "file" && record.InputType != "dir" {
+		return nil, fmt.Errorf("artifact record %s has input type %q, want file or dir", recordPath, record.InputType)
+	}
+	return &record, nil
 }
 
 // recordArtifact writes the record outside the workflow trigger path, so the
