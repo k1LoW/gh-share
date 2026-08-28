@@ -534,7 +534,11 @@ func TestParseArtifactRef(t *testing.T) {
 		{name: "empty", ref: "", wantErr: true},
 		{name: "zero", ref: "0", wantErr: true},
 		{name: "negative", ref: "-1", wantErr: true},
-		{name: "run URL without an artifact", ref: "https://github.com/o/r/actions/runs/123", want: 123},
+		// A run URL ends in a run ID, which names a different resource. Resolving
+		// it would report the run ID back as an artifact with no record.
+		{name: "run URL", ref: "https://github.com/o/r/actions/runs/123", wantErr: true},
+		{name: "API artifact URL", ref: "https://api.github.com/repos/o/r/actions/artifacts/456", want: 456},
+		{name: "artifacts path without an ID", ref: "https://github.com/o/r/actions/runs/123/artifacts", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

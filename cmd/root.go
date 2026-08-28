@@ -305,9 +305,11 @@ func reshare(ctx context.Context, ref string) error {
 	files := map[string][]byte{
 		payloadRefPath: payloadRef(shareID(), path.Base(record.PayloadDir), record.InputType, record.Input),
 	}
-	if sharePersist {
-		files[persistPath] = []byte("\n")
-	}
+	// Written whether or not --persist was passed, because the branch is kept
+	// either way. A record only ever exists on an already marked branch, but
+	// relying on that would leave the marker and the forced keep below to be
+	// read against each other across two functions.
+	files[persistPath] = []byte("\n")
 	return upload(ctx, c, owner, repo, payloadPlan{
 		files:      files,
 		payloadDir: record.PayloadDir,
@@ -778,10 +780,15 @@ func shareID() string {
 }
 
 // parseArtifactRef accepts what a previous share printed, which is the artifact
-// URL, as well as the bare ID at the end of it.
+// URL, as well as the bare ID at the end of it. A path is required to name the
+// artifact, so that a run URL is rejected here rather than resolving to the run
+// ID and failing later as a record that does not exist.
 func parseArtifactRef(ref string) (int64, error) {
 	trimmed := strings.TrimSuffix(strings.TrimSpace(ref), "/")
 	if i := strings.LastIndex(trimmed, "/"); i >= 0 {
+		if path.Base(trimmed[:i]) != "artifacts" {
+			return 0, fmt.Errorf("invalid artifact reference %q; pass an artifact URL ending in /artifacts/<id>, or the ID alone", ref)
+		}
 		trimmed = trimmed[i+1:]
 	}
 	id, err := strconv.ParseInt(trimmed, 10, 64)
