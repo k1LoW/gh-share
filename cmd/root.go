@@ -64,7 +64,7 @@ func Execute() {
 
 func newShareCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "share <file|dir|artifact>",
+		Use:   "share <file|dir>",
 		Short: "Share a single HTML file or other files and directories through GitHub Actions artifacts",
 		Long: `Share a single HTML file or other files and directories using GitHub's built-in Git and Actions APIs.
 
@@ -773,8 +773,9 @@ func payloadRef(shareID, dir, kind, name string) []byte {
 // waiting out its timeout on a workflow run that never starts.
 func shareID() string {
 	buf := make([]byte, 8)
-	// crypto/rand.Read panics rather than reporting failure, so there is no error
-	// worth surfacing from a value that only has to differ from the last one.
+	// crypto/rand.Read never returns an error and always fills buf entirely; it
+	// crashes the program instead. There is no partially filled buf to guard
+	// against, so no error reaches this caller.
 	_, _ = rand.Read(buf)
 	return time.Now().UTC().Format("20060102-150405") + "-" + hex.EncodeToString(buf)
 }
