@@ -1,5 +1,13 @@
 # Changelog
 
+## [v0.2.1](https://github.com/k1LoW/gh-share/compare/v0.2.0...v0.2.1) - 2026-08-28
+
+### Fix bug 🐛
+- fix: preserve persistent branches during purge by @k1LoW in https://github.com/k1LoW/gh-share/pull/13
+### Other Changes
+- feat: confirm purge before deletion by @k1LoW in https://github.com/k1LoW/gh-share/pull/15
+- feat: show purge progress by @k1LoW in https://github.com/k1LoW/gh-share/pull/16
+
 ## [v0.2.0](https://github.com/k1LoW/gh-share/compare/v0.1.2...v0.2.0) - 2026-08-27
 
 ### New Features 🎉
