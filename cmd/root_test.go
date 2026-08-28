@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,6 +91,14 @@ func TestGitHubAPIEndToEnd(t *testing.T) {
 		t.Fatalf("artifact URL = %q, want run %d and artifact %d", url, run.GetID(), artifact.GetID())
 	}
 
+	// A file artifact is stored unarchived, so the download is the file itself.
+	// Checking the bytes is what catches the payload being uploaded from the
+	// wrong directory or arriving empty, which the artifact name alone hides.
+	body := downloadArtifact(ctx, t, c, owner, repo, artifact.GetID())
+	if string(body) != "<h1>E2E</h1>" {
+		t.Fatalf("artifact content = %q, want %q", body, "<h1>E2E</h1>")
+	}
+
 	record := artifactRecord{
 		ArtifactURL: url,
 		ArtifactID:  artifact.GetID(),
@@ -138,6 +149,124 @@ func TestGitHubAPIEndToEnd(t *testing.T) {
 			t.Fatalf("record commit %s triggered workflow run %d", recordSHA, r.GetID())
 		}
 	}
+	if len(runs.WorkflowRuns) != 1 {
+		t.Fatalf("branch produced %d workflow runs, want 1", len(runs.WorkflowRuns))
+	}
+}
+
+func TestGitHubAPIEndToEndDirectory(t *testing.T) {
+	if os.Getenv("GH_SHARE_E2E") == "" {
+		t.Skip("set GH_SHARE_E2E=1 to run the GitHub API end-to-end test")
+	}
+
+	const repository = "k1LoW/gh-share"
+	owner, repo, ok := strings.Cut(repository, "/")
+	if !ok || owner == "" || repo == "" {
+		t.Fatalf("invalid repository: %s", repository)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	c, err := factory.NewGithubClient()
+	if err != nil {
+		t.Fatalf("create GitHub client: %v", err)
+	}
+
+	branch := fmt.Sprintf("gh-share-e2e-dir-%d", time.Now().UnixNano())
+	previousBranch := shareBranch
+	shareBranch = branch
+	t.Cleanup(func() {
+		shareBranch = previousBranch
+		_, _ = c.Git.DeleteRef(context.Background(), owner, repo, "heads/"+branch)
+	})
+
+	input := filepath.Join(t.TempDir(), "site")
+	if err := os.Mkdir(input, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"index.html": "<h1>E2E</h1>",
+		".nojekyll":  "",
+	} {
+		if err := os.WriteFile(filepath.Join(input, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ts := time.Now().UTC().Format("20060102-150405")
+	files, err := payloadFiles(input, true, ts)
+	if err != nil {
+		t.Fatalf("create payload: %v", err)
+	}
+	files[payloadRefPath] = []byte(ts + " dir site\n")
+
+	sha, err := commitPayload(ctx, c, owner, repo, branch, "Share payload", files, func(string) {})
+	if err != nil {
+		t.Fatalf("commit payload: %v", err)
+	}
+
+	run, err := waitForRun(ctx, c, owner, repo, sha, func(string) {})
+	if err != nil {
+		t.Fatalf("wait for workflow: %v", err)
+	}
+	artifact, err := findArtifact(ctx, c, owner, repo, run.GetID())
+	if err != nil {
+		t.Fatalf("find artifact: %v", err)
+	}
+
+	// A directory artifact is zipped. Payloads live under a hidden directory, so
+	// this is where a regression in hidden-file handling shows up: .nojekyll is
+	// dropped from the archive rather than failing the upload.
+	body := downloadArtifact(ctx, t, c, owner, repo, artifact.GetID())
+	archive, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("open artifact archive (%d bytes): %v", len(body), err)
+	}
+	entries := map[string]string{}
+	for _, f := range archive.File {
+		r, err := f.Open()
+		if err != nil {
+			t.Fatalf("open %s in artifact: %v", f.Name, err)
+		}
+		content, err := io.ReadAll(r)
+		r.Close()
+		if err != nil {
+			t.Fatalf("read %s in artifact: %v", f.Name, err)
+		}
+		entries[f.Name] = string(content)
+	}
+	if got, ok := entries["index.html"]; !ok || got != "<h1>E2E</h1>" {
+		t.Fatalf("artifact entries = %#v, want index.html with the payload", entries)
+	}
+	if _, ok := entries[".nojekyll"]; !ok {
+		t.Fatalf("artifact entries = %#v, want .nojekyll to survive the upload", entries)
+	}
+}
+
+func downloadArtifact(ctx context.Context, t *testing.T, c *github.Client, owner, repo string, artifactID int64) []byte {
+	t.Helper()
+
+	u, _, err := c.Actions.DownloadArtifact(ctx, owner, repo, artifactID, 10)
+	if err != nil {
+		t.Fatalf("resolve artifact download URL: %v", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		t.Fatalf("build artifact download request: %v", err)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("download artifact: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("download artifact: status %d", res.StatusCode)
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	return body
 }
 
 func TestPayloadFilesFile(t *testing.T) {
