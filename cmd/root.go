@@ -227,23 +227,14 @@ func share(ctx context.Context, input string) error {
 	if err != nil {
 		return fmt.Errorf("stat input: %w", err)
 	}
-	if shareBranch == "" || strings.ContainsAny(shareBranch, " ~^:?*[\\\\") {
-		return errors.New("invalid branch name")
-	}
-	owner, repo, err := repository(ctx, shareRepo)
+	c, owner, repo, err := prepare(ctx)
 	if err != nil {
 		return err
-	}
-	c, err := factory.NewGithubClient()
-	if err != nil {
-		return fmt.Errorf("create GitHub client: %w", err)
 	}
 	marker, err := hasPersistMarker(ctx, c, owner, repo, shareBranch)
 	if err != nil {
 		return err
 	}
-	keep := marker || sharePersist
-	target := fmt.Sprintf("%s/%s@%s", owner, repo, shareBranch)
 	ts := time.Now().UTC().Format("20060102-150405")
 	files, err := payloadFiles(input, info.IsDir(), ts)
 	if err != nil {
@@ -253,13 +244,50 @@ func share(ctx context.Context, input string) error {
 	if info.IsDir() {
 		kind = "dir"
 	}
-	files[payloadRefPath] = []byte(ts + " " + kind + " " + filepath.Base(filepath.Clean(input)) + "\n")
+	name := filepath.Base(filepath.Clean(input))
+	files[payloadRefPath] = []byte(ts + " " + kind + " " + name + "\n")
 	if sharePersist {
 		// Written unconditionally so a branch still marked by the pre-.gh-share/
 		// path picks up the current one. Rewriting identical content reuses the
 		// existing blob, so the commit carries no change for this path.
 		files[persistPath] = []byte("\n")
 	}
+	return upload(ctx, c, owner, repo, payloadPlan{
+		files:      files,
+		payloadDir: payloadsDir + "/" + ts,
+		name:       name,
+		kind:       kind,
+		keep:       marker || sharePersist,
+	})
+}
+
+func prepare(ctx context.Context) (*github.Client, string, string, error) {
+	if shareBranch == "" || strings.ContainsAny(shareBranch, " ~^:?*[\\\\") {
+		return nil, "", "", errors.New("invalid branch name")
+	}
+	owner, repo, err := repository(ctx, shareRepo)
+	if err != nil {
+		return nil, "", "", err
+	}
+	c, err := factory.NewGithubClient()
+	if err != nil {
+		return nil, "", "", fmt.Errorf("create GitHub client: %w", err)
+	}
+	return c, owner, repo, nil
+}
+
+// payloadPlan is what a share commits to the staging branch and what the result
+// describes, so that uploading does not depend on how the payload was assembled.
+type payloadPlan struct {
+	files      map[string][]byte
+	payloadDir string
+	name       string
+	kind       string
+	keep       bool
+}
+
+func upload(ctx context.Context, c *github.Client, owner, repo string, plan payloadPlan) error {
+	target := fmt.Sprintf("%s/%s@%s", owner, repo, shareBranch)
 
 	s := spinner.New(spinner.CharSets[11], 100*time.Millisecond, spinner.WithWriter(colorable.NewColorableStderr()))
 	_ = s.Color("fgCyan")
@@ -267,7 +295,7 @@ func share(ctx context.Context, input string) error {
 	s.Start()
 	defer s.Stop()
 
-	sha, err := commitPayload(ctx, c, owner, repo, shareBranch, "Share payload", files, func(message string) {
+	sha, err := commitPayload(ctx, c, owner, repo, shareBranch, "Share payload", plan.files, func(message string) {
 		s.Suffix = " " + message + " (" + target + ")"
 	})
 	if err != nil {
@@ -290,16 +318,16 @@ func share(ctx context.Context, input string) error {
 		return err
 	}
 	url := artifactURL(owner, repo, run.GetID(), artifact.GetID())
-	if keep {
+	if plan.keep {
 		s.Suffix = " Recording artifact: " + target
 		record := artifactRecord{
 			ArtifactURL: url,
 			ArtifactID:  artifact.GetID(),
 			RunID:       run.GetID(),
 			Commit:      sha,
-			PayloadDir:  payloadsDir + "/" + ts,
-			Input:       filepath.Base(filepath.Clean(input)),
-			InputType:   kind,
+			PayloadDir:  plan.payloadDir,
+			Input:       plan.name,
+			InputType:   plan.kind,
 			CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 		}
 		if err := recordArtifact(ctx, c, owner, repo, shareBranch, record); err != nil {
@@ -313,7 +341,7 @@ func share(ctx context.Context, input string) error {
 			return fmt.Errorf("open artifact URL: %w", err)
 		}
 	}
-	if !keep {
+	if !plan.keep {
 		s.Suffix = " Deleting branch: " + target
 		if _, err := c.Git.DeleteRef(ctx, owner, repo, "heads/"+shareBranch); err != nil {
 			return fmt.Errorf("delete staging branch: %w", err)
@@ -322,21 +350,20 @@ func share(ctx context.Context, input string) error {
 		s.Suffix = " Keeping branch: " + target
 	}
 	branchStatus := "deleted"
-	if keep {
+	if plan.keep {
 		branchStatus = "kept"
 	}
 	branchURL := fmt.Sprintf("https://github.com/%s/%s/tree/%s", owner, repo, shareBranch)
-	inputName := filepath.Base(filepath.Clean(input))
-	uploadMessage := fmt.Sprintf("Successfully uploaded %s.", inputName)
-	if info.IsDir() {
-		uploadMessage = fmt.Sprintf("Successfully uploaded directory: %s", inputName)
+	uploadMessage := fmt.Sprintf("Successfully uploaded %s.", plan.name)
+	if plan.kind == "dir" {
+		uploadMessage = fmt.Sprintf("Successfully uploaded directory: %s", plan.name)
 	}
 	result := shareResult{
-		Input:         inputName,
-		InputType:     kind,
+		Input:         plan.name,
+		InputType:     plan.kind,
 		Repository:    fmt.Sprintf("https://github.com/%s/%s", owner, repo),
 		Branch:        branchURL,
-		BranchDeleted: !keep,
+		BranchDeleted: !plan.keep,
 		Commit:        commitURL,
 		Workflow:      runURL,
 		Artifact:      url,
