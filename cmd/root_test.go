@@ -48,7 +48,7 @@ func TestGitHubAPIEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create payload: %v", err)
 	}
-	files[".gh-share-payload-ref"] = []byte(ts + " file report.html\n")
+	files[payloadRefPath] = []byte(ts + " file report.html\n")
 
 	sha, err := commitPayload(ctx, c, owner, repo, branch, files, func(string) {})
 	if err != nil {
@@ -104,7 +104,7 @@ func TestPayloadFilesFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wantPath := "gh-share-payload/20260827-120000/report.html"
+	wantPath := ".gh-share/payloads/20260827-120000/report.html"
 	if string(files[wantPath]) != "<h1>Report</h1>" {
 		t.Fatalf("payloadFiles() = %#v, want %q at %q", files, "<h1>Report</h1>", wantPath)
 	}
@@ -127,7 +127,7 @@ func TestPayloadFilesDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wantPath := "gh-share-payload/20260827-120000/nested/report.html"
+	wantPath := ".gh-share/payloads/20260827-120000/nested/report.html"
 	if string(files[wantPath]) != "<h1>Report</h1>" {
 		t.Fatalf("payloadFiles() = %#v, want %q at %q", files, "<h1>Report</h1>", wantPath)
 	}
@@ -181,5 +181,28 @@ func TestConfirmPurge(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Purge canceled.") {
 		t.Fatalf("cancellation output = %q", out.String())
+	}
+}
+
+func TestWorkflowMatchesLayout(t *testing.T) {
+	t.Parallel()
+
+	workflow := string(uploadWorkflow)
+
+	// The workflow triggers on the payload ref alone. If the Go constants and
+	// the embedded workflow drift apart, a share silently stops starting runs.
+	if !strings.Contains(workflow, "- '"+payloadRefPath+"'") {
+		t.Errorf("workflow does not trigger on %q:\n%s", payloadRefPath, workflow)
+	}
+	if !strings.Contains(workflow, "read -r PAYLOAD_DIR PAYLOAD_TYPE PAYLOAD_NAME < "+payloadRefPath) {
+		t.Errorf("workflow does not read %q:\n%s", payloadRefPath, workflow)
+	}
+	if !strings.Contains(workflow, payloadsDir+"/${{ env.PAYLOAD_DIR }}/") {
+		t.Errorf("workflow does not upload from %q:\n%s", payloadsDir, workflow)
+	}
+	// Payloads live under a hidden directory, so upload-artifact must be told to
+	// keep hidden files or a shared directory silently loses its dotfiles.
+	if !strings.Contains(workflow, "include-hidden-files: true") {
+		t.Errorf("workflow does not set include-hidden-files:\n%s", workflow)
 	}
 }

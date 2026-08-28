@@ -3,8 +3,7 @@ name: "gh-share: Upload payload"
 on:
   push:
     paths:
-      - 'gh-share-payload/**'
-      - '.gh-share-payload-ref'
+      - '.gh-share/payload-ref'
 
 jobs:
   upload:
@@ -15,7 +14,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Read payload ref
         run: |
-          read -r PAYLOAD_DIR PAYLOAD_TYPE PAYLOAD_NAME < .gh-share-payload-ref
+          read -r PAYLOAD_DIR PAYLOAD_TYPE PAYLOAD_NAME < .gh-share/payload-ref
           echo "PAYLOAD_DIR=$PAYLOAD_DIR" >> "$GITHUB_ENV"
           echo "PAYLOAD_TYPE=$PAYLOAD_TYPE" >> "$GITHUB_ENV"
           echo "PAYLOAD_NAME=$PAYLOAD_NAME" >> "$GITHUB_ENV"
@@ -24,12 +23,14 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ env.PAYLOAD_NAME }}
-          path: gh-share-payload/${{ env.PAYLOAD_DIR }}/
+          path: .gh-share/payloads/${{ env.PAYLOAD_DIR }}/
           archive: false
+          include-hidden-files: true
       - name: Upload (dir)
         if: env.PAYLOAD_TYPE == 'dir'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ env.PAYLOAD_NAME }}
-          path: gh-share-payload/${{ env.PAYLOAD_DIR }}/
+          path: .gh-share/payloads/${{ env.PAYLOAD_DIR }}/
           archive: true
+          include-hidden-files: true

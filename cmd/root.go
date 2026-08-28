@@ -28,6 +28,17 @@ import (
 const (
 	defaultBranch = "gh-share-staging"
 	workflowFile  = "upload-gh-share-payload.yml"
+
+	metaDir        = ".gh-share"
+	payloadRefPath = metaDir + "/payload-ref"
+	payloadsDir    = metaDir + "/payloads"
+	persistPath    = metaDir + "/persist"
+	workflowPath   = ".github/workflows/" + workflowFile
+
+	// Staging branches created before the .gh-share/ layout carry the marker at
+	// the repository root. Reading it keeps those branches from being treated as
+	// unmarked and deleted on the next share or purge.
+	legacyPersistPath = ".gh-share-persist"
 )
 
 var shareRepo, shareBranch string
@@ -241,9 +252,12 @@ func share(ctx context.Context, input string) error {
 	if info.IsDir() {
 		kind = "dir"
 	}
-	files[".gh-share-payload-ref"] = []byte(ts + " " + kind + " " + filepath.Base(filepath.Clean(input)) + "\n")
-	if sharePersist && !marker {
-		files[".gh-share-persist"] = []byte("\n")
+	files[payloadRefPath] = []byte(ts + " " + kind + " " + filepath.Base(filepath.Clean(input)) + "\n")
+	if sharePersist {
+		// Written unconditionally so a branch still marked by the pre-.gh-share/
+		// path picks up the current one. Rewriting identical content reuses the
+		// existing blob, so the commit carries no change for this path.
+		files[persistPath] = []byte("\n")
 	}
 
 	s := spinner.New(spinner.CharSets[11], 100*time.Millisecond, spinner.WithWriter(colorable.NewColorableStderr()))
@@ -404,7 +418,7 @@ func payloadFiles(input string, dir bool, ts string) (map[string][]byte, error) 
 		if err != nil {
 			return nil, fmt.Errorf("read input: %w", err)
 		}
-		files[filepath.ToSlash(filepath.Join("gh-share-payload", ts, filepath.Base(input)))] = data
+		files[filepath.ToSlash(filepath.Join(payloadsDir, ts, filepath.Base(input)))] = data
 		return files, nil
 	}
 	rootDir, err := os.OpenRoot(filepath.Clean(input))
@@ -423,7 +437,7 @@ func payloadFiles(input string, dir bool, ts string) (map[string][]byte, error) 
 		if err != nil {
 			return err
 		}
-		files[filepath.ToSlash(filepath.Join("gh-share-payload", ts, path))] = data
+		files[filepath.ToSlash(filepath.Join(payloadsDir, ts, path))] = data
 		return nil
 	})
 	if err != nil {
@@ -436,7 +450,20 @@ func payloadFiles(input string, dir bool, ts string) (map[string][]byte, error) 
 }
 
 func hasPersistMarker(ctx context.Context, c *github.Client, owner, repo, branch string) (bool, error) {
-	_, _, _, err := c.Repositories.GetContents(ctx, owner, repo, ".gh-share-persist", &github.RepositoryContentGetOptions{Ref: branch})
+	for _, path := range []string{persistPath, legacyPersistPath} {
+		found, err := branchContains(ctx, c, owner, repo, branch, path)
+		if err != nil {
+			return false, fmt.Errorf("check persist marker: %w", err)
+		}
+		if found {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func branchContains(ctx context.Context, c *github.Client, owner, repo, branch, path string) (bool, error) {
+	_, _, _, err := c.Repositories.GetContents(ctx, owner, repo, path, &github.RepositoryContentGetOptions{Ref: branch})
 	if err == nil {
 		return true, nil
 	}
@@ -444,7 +471,7 @@ func hasPersistMarker(ctx context.Context, c *github.Client, owner, repo, branch
 	if errors.As(err, &e) && (e.Response.StatusCode == 404 || e.Response.StatusCode == 409) {
 		return false, nil
 	}
-	return false, fmt.Errorf("check persist marker: %w", err)
+	return false, err
 }
 
 func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch string, files map[string][]byte, progress func(string)) (string, error) {
@@ -472,7 +499,7 @@ func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch st
 	if err != nil {
 		return "", fmt.Errorf("get staging commit: %w", err)
 	}
-	files[".github/workflows/upload-gh-share-payload.yml"] = uploadWorkflow
+	files[workflowPath] = uploadWorkflow
 	progress("Committing")
 	tree, err := createTree(ctx, c, owner, repo, ref.GetObject().GetSHA(), files)
 	if err != nil {

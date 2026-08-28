@@ -41,7 +41,18 @@ The primary use case is sharing a single-page HTML file. The command also suppor
 
 The command displays progress while it creates the staging branch, creates the commit, waits for the workflow, and removes or keeps the branch. The final output includes links to the staging branch, commit, workflow run, and artifact.
 
-For a file, the artifact contains the file under `gh-share-payload/<timestamp>/`. For a directory, the directory contents are uploaded as one artifact.
+For a file, the artifact contains the file under `.gh-share/payloads/<timestamp>/`. For a directory, the directory contents are uploaded as one artifact.
+
+## Staging branch layout
+
+Everything gh-share writes to the staging branch lives under `.gh-share/`, apart from the workflow that GitHub requires under `.github/workflows/`.
+
+```
+.gh-share/
+  payload-ref                   # the workflow's only trigger path
+  persist                       # present when --persist was used
+  payloads/<timestamp>/         # the uploaded payload
+```
 
 ## How it works
 
@@ -68,8 +79,8 @@ The process is:
 1. Resolve the target repository with `gh repo view`.
 2. Check whether the staging branch exists. If it does not, create it from the repository's default branch.
 3. Create Git blobs for the payload and build the required tree structure through the GitHub Git Database API.
-4. Add `.gh-share-payload-ref` and the embedded `.github/workflows/upload-gh-share-payload.yml` workflow, then create one commit containing all of them.
-5. Update the staging branch to that commit. The push triggers the workflow because the payload paths changed.
+4. Add `.gh-share/payload-ref` and the embedded `.github/workflows/upload-gh-share-payload.yml` workflow, then create one commit containing all of them.
+5. Update the staging branch to that commit. The push triggers the workflow because `.gh-share/payload-ref` changed.
 6. Poll GitHub Actions until the workflow completes and resolve the artifact URL.
 7. Delete the staging branch, unless persistence was requested or the branch already contains the persistence marker.
 
@@ -79,7 +90,9 @@ GitHub Actions can only run a workflow that exists in the commit that triggered 
 
 The extension uses the Git Database API directly to create blobs, trees, commits, and refs. A single commit is important here: it gives the workflow one unambiguous commit SHA to monitor and avoids triggering the workflow multiple times during one upload.
 
-The workflow reads `.gh-share-payload-ref` to find the timestamped payload directory and determine whether the input was a file or directory. It then uploads that directory with `actions/upload-artifact`.
+The workflow reads `.gh-share/payload-ref` to find the timestamped payload directory and determine whether the input was a file or directory. It then uploads that directory with `actions/upload-artifact`.
+
+Only `.gh-share/payload-ref` triggers the workflow. Every share rewrites it with a new timestamp, so listing the payload directory as a trigger path as well would be redundant.
 
 The staging branch is based on the repository's default branch, so the GitHub API can build a valid commit without cloning or modifying the local repository.
 
@@ -94,7 +107,7 @@ The staging branch is based on the repository's default branch, so the GitHub AP
 | `--json` | Output upload details as JSON. |
 | `--purge` | Delete gh-share workflow runs, artifacts, and staging branches instead of uploading. |
 
-`--purge` asks for confirmation before removing all completed runs of the embedded gh-share workflow in the target repository. The associated artifacts and logs are removed with the runs, and branches used by those runs are deleted except for the repository's default branch and branches containing `.gh-share-persist`. Artifact URLs from the deleted runs will no longer work.
+`--purge` asks for confirmation before removing all completed runs of the embedded gh-share workflow in the target repository. The associated artifacts and logs are removed with the runs, and branches used by those runs are deleted except for the repository's default branch and branches containing `.gh-share/persist`. Artifact URLs from the deleted runs will no longer work.
 
 ## Installation
 
