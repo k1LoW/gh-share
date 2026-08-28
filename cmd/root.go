@@ -28,6 +28,18 @@ import (
 const (
 	defaultBranch = "gh-share-staging"
 	workflowFile  = "upload-gh-share-payload.yml"
+
+	metaDir        = ".gh-share"
+	payloadRefPath = metaDir + "/payload-ref"
+	payloadsDir    = metaDir + "/payloads"
+	artifactsDir   = metaDir + "/artifacts"
+	persistPath    = metaDir + "/persist"
+	workflowPath   = ".github/workflows/" + workflowFile
+
+	// Staging branches created before the .gh-share/ layout carry the marker at
+	// the repository root. Reading it keeps those branches from being treated as
+	// unmarked and deleted on the next share or purge.
+	legacyPersistPath = ".gh-share-persist"
 )
 
 var shareRepo, shareBranch string
@@ -241,9 +253,12 @@ func share(ctx context.Context, input string) error {
 	if info.IsDir() {
 		kind = "dir"
 	}
-	files[".gh-share-payload-ref"] = []byte(ts + " " + kind + " " + filepath.Base(filepath.Clean(input)) + "\n")
-	if sharePersist && !marker {
-		files[".gh-share-persist"] = []byte("\n")
+	files[payloadRefPath] = []byte(ts + " " + kind + " " + filepath.Base(filepath.Clean(input)) + "\n")
+	if sharePersist {
+		// Written unconditionally so a branch still marked by the pre-.gh-share/
+		// path picks up the current one. Rewriting identical content reuses the
+		// existing blob, so the commit carries no change for this path.
+		files[persistPath] = []byte("\n")
 	}
 
 	s := spinner.New(spinner.CharSets[11], 100*time.Millisecond, spinner.WithWriter(colorable.NewColorableStderr()))
@@ -252,7 +267,7 @@ func share(ctx context.Context, input string) error {
 	s.Start()
 	defer s.Stop()
 
-	sha, err := commitPayload(ctx, c, owner, repo, shareBranch, files, func(message string) {
+	sha, err := commitPayload(ctx, c, owner, repo, shareBranch, "Share payload", files, func(message string) {
 		s.Suffix = " " + message + " (" + target + ")"
 	})
 	if err != nil {
@@ -270,9 +285,28 @@ func share(ctx context.Context, input string) error {
 	s.Suffix = " Workflow completed: " + runURL
 
 	s.Suffix = " Checking artifact: " + runURL
-	url, err := artifactURL(ctx, c, owner, repo, run.GetID())
+	artifact, err := findArtifact(ctx, c, owner, repo, run.GetID())
 	if err != nil {
 		return err
+	}
+	url := artifactURL(owner, repo, run.GetID(), artifact.GetID())
+	if keep {
+		s.Suffix = " Recording artifact: " + target
+		record := artifactRecord{
+			ArtifactURL: url,
+			ArtifactID:  artifact.GetID(),
+			RunID:       run.GetID(),
+			Commit:      sha,
+			PayloadDir:  payloadsDir + "/" + ts,
+			Input:       filepath.Base(filepath.Clean(input)),
+			InputType:   kind,
+			CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		}
+		if err := recordArtifact(ctx, c, owner, repo, shareBranch, record); err != nil {
+			// The upload already succeeded, so the URL must survive the error or
+			// the user loses the only thing this command exists to produce.
+			return fmt.Errorf("%w (artifact URL: %s)", err, url)
+		}
 	}
 	if shareOpen {
 		if err := openURL(url); err != nil {
@@ -404,7 +438,7 @@ func payloadFiles(input string, dir bool, ts string) (map[string][]byte, error) 
 		if err != nil {
 			return nil, fmt.Errorf("read input: %w", err)
 		}
-		files[filepath.ToSlash(filepath.Join("gh-share-payload", ts, filepath.Base(input)))] = data
+		files[filepath.ToSlash(filepath.Join(payloadsDir, ts, filepath.Base(input)))] = data
 		return files, nil
 	}
 	rootDir, err := os.OpenRoot(filepath.Clean(input))
@@ -423,7 +457,7 @@ func payloadFiles(input string, dir bool, ts string) (map[string][]byte, error) 
 		if err != nil {
 			return err
 		}
-		files[filepath.ToSlash(filepath.Join("gh-share-payload", ts, path))] = data
+		files[filepath.ToSlash(filepath.Join(payloadsDir, ts, path))] = data
 		return nil
 	})
 	if err != nil {
@@ -436,7 +470,20 @@ func payloadFiles(input string, dir bool, ts string) (map[string][]byte, error) 
 }
 
 func hasPersistMarker(ctx context.Context, c *github.Client, owner, repo, branch string) (bool, error) {
-	_, _, _, err := c.Repositories.GetContents(ctx, owner, repo, ".gh-share-persist", &github.RepositoryContentGetOptions{Ref: branch})
+	for _, path := range []string{persistPath, legacyPersistPath} {
+		found, err := branchContains(ctx, c, owner, repo, branch, path)
+		if err != nil {
+			return false, fmt.Errorf("check persist marker: %w", err)
+		}
+		if found {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func branchContains(ctx context.Context, c *github.Client, owner, repo, branch, path string) (bool, error) {
+	_, _, _, err := c.Repositories.GetContents(ctx, owner, repo, path, &github.RepositoryContentGetOptions{Ref: branch})
 	if err == nil {
 		return true, nil
 	}
@@ -444,10 +491,10 @@ func hasPersistMarker(ctx context.Context, c *github.Client, owner, repo, branch
 	if errors.As(err, &e) && (e.Response.StatusCode == 404 || e.Response.StatusCode == 409) {
 		return false, nil
 	}
-	return false, fmt.Errorf("check persist marker: %w", err)
+	return false, err
 }
 
-func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch string, files map[string][]byte, progress func(string)) (string, error) {
+func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch, message string, files map[string][]byte, progress func(string)) (string, error) {
 	ref, _, err := c.Git.GetRef(ctx, owner, repo, "heads/"+branch)
 	if err != nil {
 		var e *github.ErrorResponse
@@ -472,13 +519,13 @@ func commitPayload(ctx context.Context, c *github.Client, owner, repo, branch st
 	if err != nil {
 		return "", fmt.Errorf("get staging commit: %w", err)
 	}
-	files[".github/workflows/upload-gh-share-payload.yml"] = uploadWorkflow
+	files[workflowPath] = uploadWorkflow
 	progress("Committing")
 	tree, err := createTree(ctx, c, owner, repo, ref.GetObject().GetSHA(), files)
 	if err != nil {
 		return "", err
 	}
-	commit, _, err := c.Git.CreateCommit(ctx, owner, repo, github.Commit{Message: new("Share payload"), Tree: tree, Parents: []*github.Commit{baseCommit}}, nil)
+	commit, _, err := c.Git.CreateCommit(ctx, owner, repo, github.Commit{Message: new(message), Tree: tree, Parents: []*github.Commit{baseCommit}}, nil)
 	if err != nil {
 		return "", fmt.Errorf("create commit: %w", err)
 	}
@@ -588,15 +635,50 @@ func waitForRun(ctx context.Context, c *github.Client, owner, repo, sha string, 
 	}
 }
 
-func artifactURL(ctx context.Context, c *github.Client, owner, repo string, runID int64) (string, error) {
+func findArtifact(ctx context.Context, c *github.Client, owner, repo string, runID int64) (*github.Artifact, error) {
 	list, _, err := c.Actions.ListWorkflowRunArtifacts(ctx, owner, repo, runID, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(list.Artifacts) == 0 {
-		return "", errors.New("workflow completed without an artifact")
+		return nil, errors.New("workflow completed without an artifact")
 	}
-	return fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d/artifacts/%d", owner, repo, runID, list.Artifacts[0].GetID()), nil
+	return list.Artifacts[0], nil
+}
+
+func artifactURL(owner, repo string, runID, artifactID int64) string {
+	return fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d/artifacts/%d", owner, repo, runID, artifactID)
+}
+
+type artifactRecord struct {
+	ArtifactURL string `json:"artifact_url"`
+	ArtifactID  int64  `json:"artifact_id"`
+	RunID       int64  `json:"run_id"`
+	Commit      string `json:"commit"`
+	PayloadDir  string `json:"payload_dir"`
+	Input       string `json:"input"`
+	InputType   string `json:"input_type"`
+	CreatedAt   string `json:"created_at"`
+}
+
+func artifactRecordPath(artifactID int64) string {
+	return fmt.Sprintf("%s/%d.json", artifactsDir, artifactID)
+}
+
+// recordArtifact writes the record outside the workflow trigger path, so the
+// commit it creates does not start a second upload run for the same payload.
+// Keying the file by artifact ID keeps the lookup a single API call even after
+// --purge has removed the workflow run the URL points at.
+func recordArtifact(ctx context.Context, c *github.Client, owner, repo, branch string, record artifactRecord) error {
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode artifact record: %w", err)
+	}
+	files := map[string][]byte{artifactRecordPath(record.ArtifactID): append(data, '\n')}
+	if _, err := commitPayload(ctx, c, owner, repo, branch, "Record shared artifact", files, func(string) {}); err != nil {
+		return fmt.Errorf("record shared artifact: %w", err)
+	}
+	return nil
 }
 
 func openURL(url string) error {

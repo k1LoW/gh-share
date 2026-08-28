@@ -1,15 +1,20 @@
 package cmd
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/go-github/v79/github"
 	"github.com/k1LoW/go-github-client/v79/factory"
 )
 
@@ -48,9 +53,9 @@ func TestGitHubAPIEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create payload: %v", err)
 	}
-	files[".gh-share-payload-ref"] = []byte(ts + " file report.html\n")
+	files[payloadRefPath] = []byte(ts + " file report.html\n")
 
-	sha, err := commitPayload(ctx, c, owner, repo, branch, files, func(string) {})
+	sha, err := commitPayload(ctx, c, owner, repo, branch, "Share payload", files, func(string) {})
 	if err != nil {
 		t.Fatalf("commit payload: %v", err)
 	}
@@ -74,20 +79,194 @@ func TestGitHubAPIEndToEnd(t *testing.T) {
 		t.Fatalf("workflow conclusion = %q, want success", run.GetConclusion())
 	}
 
-	artifact, err := artifactURL(ctx, c, owner, repo, run.GetID())
+	artifact, err := findArtifact(ctx, c, owner, repo, run.GetID())
 	if err != nil {
-		t.Fatalf("get artifact URL: %v", err)
+		t.Fatalf("find artifact: %v", err)
 	}
-	if !strings.Contains(artifact, fmt.Sprintf("/runs/%d/artifacts/", run.GetID())) {
-		t.Fatalf("artifact URL = %q, want run ID %d", artifact, run.GetID())
+	if artifact.GetName() != "report.html" {
+		t.Fatalf("artifact name = %q, want report.html", artifact.GetName())
 	}
-	artifacts, _, err := c.Actions.ListWorkflowRunArtifacts(ctx, owner, repo, run.GetID(), nil)
+	url := artifactURL(owner, repo, run.GetID(), artifact.GetID())
+	if !strings.Contains(url, fmt.Sprintf("/runs/%d/artifacts/%d", run.GetID(), artifact.GetID())) {
+		t.Fatalf("artifact URL = %q, want run %d and artifact %d", url, run.GetID(), artifact.GetID())
+	}
+
+	// A file artifact is stored unarchived, so the download is the file itself.
+	// Checking the bytes is what catches the payload being uploaded from the
+	// wrong directory or arriving empty, which the artifact name alone hides.
+	body := downloadArtifact(ctx, t, c, owner, repo, artifact.GetID())
+	if string(body) != "<h1>E2E</h1>" {
+		t.Fatalf("artifact content = %q, want %q", body, "<h1>E2E</h1>")
+	}
+
+	record := artifactRecord{
+		ArtifactURL: url,
+		ArtifactID:  artifact.GetID(),
+		RunID:       run.GetID(),
+		Commit:      sha,
+		PayloadDir:  payloadsDir + "/" + ts,
+		Input:       "report.html",
+		InputType:   "file",
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := recordArtifact(ctx, c, owner, repo, branch, record); err != nil {
+		t.Fatalf("record artifact: %v", err)
+	}
+
+	content, _, _, err := c.Repositories.GetContents(ctx, owner, repo, artifactRecordPath(artifact.GetID()), &github.RepositoryContentGetOptions{Ref: branch})
 	if err != nil {
-		t.Fatalf("list artifacts: %v", err)
+		t.Fatalf("read artifact record: %v", err)
 	}
-	if len(artifacts.Artifacts) != 1 || artifacts.Artifacts[0].GetName() != "report.html" {
-		t.Fatalf("artifact name = %#v, want report.html", artifacts.Artifacts)
+	raw, err := content.GetContent()
+	if err != nil {
+		t.Fatalf("decode artifact record: %v", err)
 	}
+	var stored artifactRecord
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		t.Fatalf("unmarshal artifact record: %v", err)
+	}
+	if stored.ArtifactURL != url || stored.PayloadDir != record.PayloadDir || stored.Input != "report.html" {
+		t.Fatalf("artifact record = %#v, want URL %q and payload dir %q", stored, url, record.PayloadDir)
+	}
+
+	// The record commit must not start a second upload run, otherwise every
+	// share would duplicate its artifact.
+	recordRef, _, err := c.Git.GetRef(ctx, owner, repo, "heads/"+branch)
+	if err != nil {
+		t.Fatalf("get staging branch after record: %v", err)
+	}
+	recordSHA := recordRef.GetObject().GetSHA()
+	if recordSHA == sha {
+		t.Fatal("record did not create a commit")
+	}
+	time.Sleep(30 * time.Second)
+	runs, _, err := c.Actions.ListWorkflowRunsByFileName(ctx, owner, repo, workflowFile, &github.ListWorkflowRunsOptions{Branch: branch, ListOptions: github.ListOptions{PerPage: 20}})
+	if err != nil {
+		t.Fatalf("list workflow runs after record: %v", err)
+	}
+	for _, r := range runs.WorkflowRuns {
+		if r.GetHeadSHA() == recordSHA {
+			t.Fatalf("record commit %s triggered workflow run %d", recordSHA, r.GetID())
+		}
+	}
+	if len(runs.WorkflowRuns) != 1 {
+		t.Fatalf("branch produced %d workflow runs, want 1", len(runs.WorkflowRuns))
+	}
+}
+
+func TestGitHubAPIEndToEndDirectory(t *testing.T) {
+	if os.Getenv("GH_SHARE_E2E") == "" {
+		t.Skip("set GH_SHARE_E2E=1 to run the GitHub API end-to-end test")
+	}
+
+	const repository = "k1LoW/gh-share"
+	owner, repo, ok := strings.Cut(repository, "/")
+	if !ok || owner == "" || repo == "" {
+		t.Fatalf("invalid repository: %s", repository)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	c, err := factory.NewGithubClient()
+	if err != nil {
+		t.Fatalf("create GitHub client: %v", err)
+	}
+
+	branch := fmt.Sprintf("gh-share-e2e-dir-%d", time.Now().UnixNano())
+	previousBranch := shareBranch
+	shareBranch = branch
+	t.Cleanup(func() {
+		shareBranch = previousBranch
+		_, _ = c.Git.DeleteRef(context.Background(), owner, repo, "heads/"+branch)
+	})
+
+	input := filepath.Join(t.TempDir(), "site")
+	if err := os.Mkdir(input, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"index.html": "<h1>E2E</h1>",
+		".nojekyll":  "",
+	} {
+		if err := os.WriteFile(filepath.Join(input, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ts := time.Now().UTC().Format("20060102-150405")
+	files, err := payloadFiles(input, true, ts)
+	if err != nil {
+		t.Fatalf("create payload: %v", err)
+	}
+	files[payloadRefPath] = []byte(ts + " dir site\n")
+
+	sha, err := commitPayload(ctx, c, owner, repo, branch, "Share payload", files, func(string) {})
+	if err != nil {
+		t.Fatalf("commit payload: %v", err)
+	}
+
+	run, err := waitForRun(ctx, c, owner, repo, sha, func(string) {})
+	if err != nil {
+		t.Fatalf("wait for workflow: %v", err)
+	}
+	artifact, err := findArtifact(ctx, c, owner, repo, run.GetID())
+	if err != nil {
+		t.Fatalf("find artifact: %v", err)
+	}
+
+	// A directory artifact is zipped. Payloads live under a hidden directory, so
+	// this is where a regression in hidden-file handling shows up: .nojekyll is
+	// dropped from the archive rather than failing the upload.
+	body := downloadArtifact(ctx, t, c, owner, repo, artifact.GetID())
+	archive, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("open artifact archive (%d bytes): %v", len(body), err)
+	}
+	entries := map[string]string{}
+	for _, f := range archive.File {
+		r, err := f.Open()
+		if err != nil {
+			t.Fatalf("open %s in artifact: %v", f.Name, err)
+		}
+		content, err := io.ReadAll(r)
+		r.Close()
+		if err != nil {
+			t.Fatalf("read %s in artifact: %v", f.Name, err)
+		}
+		entries[f.Name] = string(content)
+	}
+	if got, ok := entries["index.html"]; !ok || got != "<h1>E2E</h1>" {
+		t.Fatalf("artifact entries = %#v, want index.html with the payload", entries)
+	}
+	if _, ok := entries[".nojekyll"]; !ok {
+		t.Fatalf("artifact entries = %#v, want .nojekyll to survive the upload", entries)
+	}
+}
+
+func downloadArtifact(ctx context.Context, t *testing.T, c *github.Client, owner, repo string, artifactID int64) []byte {
+	t.Helper()
+
+	u, _, err := c.Actions.DownloadArtifact(ctx, owner, repo, artifactID, 10)
+	if err != nil {
+		t.Fatalf("resolve artifact download URL: %v", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		t.Fatalf("build artifact download request: %v", err)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("download artifact: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("download artifact: status %d", res.StatusCode)
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	return body
 }
 
 func TestPayloadFilesFile(t *testing.T) {
@@ -104,7 +283,7 @@ func TestPayloadFilesFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wantPath := "gh-share-payload/20260827-120000/report.html"
+	wantPath := ".gh-share/payloads/20260827-120000/report.html"
 	if string(files[wantPath]) != "<h1>Report</h1>" {
 		t.Fatalf("payloadFiles() = %#v, want %q at %q", files, "<h1>Report</h1>", wantPath)
 	}
@@ -127,7 +306,7 @@ func TestPayloadFilesDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wantPath := "gh-share-payload/20260827-120000/nested/report.html"
+	wantPath := ".gh-share/payloads/20260827-120000/nested/report.html"
 	if string(files[wantPath]) != "<h1>Report</h1>" {
 		t.Fatalf("payloadFiles() = %#v, want %q at %q", files, "<h1>Report</h1>", wantPath)
 	}
@@ -181,5 +360,53 @@ func TestConfirmPurge(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Purge canceled.") {
 		t.Fatalf("cancellation output = %q", out.String())
+	}
+}
+
+func TestArtifactURL(t *testing.T) {
+	t.Parallel()
+
+	got := artifactURL("k1LoW", "gh-share", 123, 456)
+	want := "https://github.com/k1LoW/gh-share/actions/runs/123/artifacts/456"
+	if got != want {
+		t.Errorf("artifactURL() = %q, want %q", got, want)
+	}
+}
+
+func TestArtifactRecordPath(t *testing.T) {
+	t.Parallel()
+
+	got := artifactRecordPath(456)
+	want := ".gh-share/artifacts/456.json"
+	if got != want {
+		t.Errorf("artifactRecordPath() = %q, want %q", got, want)
+	}
+}
+
+func TestWorkflowMatchesLayout(t *testing.T) {
+	t.Parallel()
+
+	workflow := string(uploadWorkflow)
+
+	// The workflow triggers on the payload ref alone. If the Go constants and
+	// the embedded workflow drift apart, a share either never starts a run or
+	// the artifact record commit starts a redundant one.
+	if !strings.Contains(workflow, "- '"+payloadRefPath+"'") {
+		t.Errorf("workflow does not trigger on %q:\n%s", payloadRefPath, workflow)
+	}
+	if !strings.Contains(workflow, "read -r PAYLOAD_DIR PAYLOAD_TYPE PAYLOAD_NAME < "+payloadRefPath) {
+		t.Errorf("workflow does not read %q:\n%s", payloadRefPath, workflow)
+	}
+	if !strings.Contains(workflow, payloadsDir+"/${{ env.PAYLOAD_DIR }}/") {
+		t.Errorf("workflow does not upload from %q:\n%s", payloadsDir, workflow)
+	}
+	if strings.Contains(workflow, artifactsDir) {
+		t.Errorf("workflow references %q, so artifact records would trigger or be uploaded:\n%s", artifactsDir, workflow)
+	}
+
+	// Payloads live under a hidden directory, so upload-artifact must be told to
+	// keep hidden files or a shared directory silently loses its dotfiles.
+	if !strings.Contains(workflow, "include-hidden-files: true") {
+		t.Errorf("workflow does not set include-hidden-files:\n%s", workflow)
 	}
 }

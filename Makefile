@@ -10,7 +10,7 @@ test:
 	go test ./... -coverprofile=coverage.out -covermode=count -count=1
 
 e2e:
-	GH_SHARE_E2E=1 go test ./cmd -run '^TestGitHubAPIEndToEnd$$' -count=1 -v
+	GH_SHARE_E2E=1 go test ./cmd -run '^TestGitHubAPIEndToEnd' -count=1 -v
 
 lint:
 	golangci-lint run ./...
