@@ -52,7 +52,17 @@ Everything gh-share writes to the staging branch lives under `.gh-share/`, apart
   payload-ref                   # the workflow's only trigger path
   persist                       # present when --persist was used
   payloads/<timestamp>/         # the uploaded payload
+  artifacts/<artifact id>.json  # what a given artifact URL was made from
 ```
+
+With `--persist`, the artifact record makes an artifact URL resolvable back to its source. Take the artifact ID from the end of the URL and read the matching record:
+
+```bash
+$ gh api "repos/OWNER/REPO/contents/.gh-share/artifacts/456.json?ref=gh-share-staging" \
+    -H 'Accept: application/vnd.github.raw'
+```
+
+The record names the payload directory on the branch, so the shared file or directory can be recovered even after the artifact itself has expired under the retention policy.
 
 ## How it works
 
@@ -71,7 +81,7 @@ flowchart TD
     H --> I[Find artifact and print URL]
     I --> J{Persist requested or enabled?}
     J -->|No| K[Delete staging branch]
-    J -->|Yes| L[Keep staging branch]
+    J -->|Yes| L[Record artifact and keep staging branch]
 ```
 
 The process is:
@@ -82,7 +92,8 @@ The process is:
 4. Add `.gh-share/payload-ref` and the embedded `.github/workflows/upload-gh-share-payload.yml` workflow, then create one commit containing all of them.
 5. Update the staging branch to that commit. The push triggers the workflow because `.gh-share/payload-ref` changed.
 6. Poll GitHub Actions until the workflow completes and resolve the artifact URL.
-7. Delete the staging branch, unless persistence was requested or the branch already contains the persistence marker.
+7. When the staging branch is kept, write `.gh-share/artifacts/<artifact id>.json` recording which input the artifact URL was produced from.
+8. Delete the staging branch, unless persistence was requested or the branch already contains the persistence marker.
 
 ### Why this is tricky
 
@@ -92,7 +103,7 @@ The extension uses the Git Database API directly to create blobs, trees, commits
 
 The workflow reads `.gh-share/payload-ref` to find the timestamped payload directory and determine whether the input was a file or directory. It then uploads that directory with `actions/upload-artifact`.
 
-Only `.gh-share/payload-ref` triggers the workflow. Every share rewrites it with a new timestamp, so listing the payload directory as a trigger path as well would be redundant.
+Only `.gh-share/payload-ref` triggers the workflow. That is what makes the artifact record possible: the record is written under `.gh-share/artifacts/`, so committing it does not start a second upload run for the same payload.
 
 The staging branch is based on the repository's default branch, so the GitHub API can build a valid commit without cloning or modifying the local repository.
 
