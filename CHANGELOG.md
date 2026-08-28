@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.3.0](https://github.com/k1LoW/gh-share/compare/v0.2.1...v0.3.0) - 2026-08-28
+
+### Breaking Changes 🛠
+- feat!: record shared artifacts under the new .gh-share/ layout by @k1LoW in https://github.com/k1LoW/gh-share/pull/18
+
 ## [v0.2.1](https://github.com/k1LoW/gh-share/compare/v0.2.0...v0.2.1) - 2026-08-28
 
 ### Fix bug 🐛
