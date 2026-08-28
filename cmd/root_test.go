@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,7 +54,7 @@ func TestGitHubAPIEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create payload: %v", err)
 	}
-	files[payloadRefPath] = []byte(ts + " file report.html\n")
+	files[payloadRefPath] = payloadRef(shareID(), ts, "file", "report.html")
 
 	sha, err := commitPayload(ctx, c, owner, repo, branch, "Share payload", files, func(string) {})
 	if err != nil {
@@ -152,6 +153,67 @@ func TestGitHubAPIEndToEnd(t *testing.T) {
 	if len(runs.WorkflowRuns) != 1 {
 		t.Fatalf("branch produced %d workflow runs, want 1", len(runs.WorkflowRuns))
 	}
+
+	// Resharing rewrites nothing but the share ID in the payload ref. The payload
+	// stays where it is, so this is what proves that the share ID alone re-triggers
+	// the workflow and that the artifact is reproduced from the branch.
+	reshareFiles := map[string][]byte{
+		payloadRefPath: payloadRef(shareID(), path.Base(stored.PayloadDir), stored.InputType, stored.Input),
+	}
+	reshareSHA, err := commitPayload(ctx, c, owner, repo, branch, "Share payload", reshareFiles, func(string) {})
+	if err != nil {
+		t.Fatalf("commit reshare payload ref: %v", err)
+	}
+	reshareRun, err := waitForRun(ctx, c, owner, repo, reshareSHA, func(string) {})
+	if err != nil {
+		t.Fatalf("wait for reshare workflow: %v", err)
+	}
+	reshareArtifact, err := findArtifact(ctx, c, owner, repo, reshareRun.GetID())
+	if err != nil {
+		t.Fatalf("find reshare artifact: %v", err)
+	}
+	if reshareArtifact.GetID() == artifact.GetID() {
+		t.Fatal("reshare produced the same artifact as the original share")
+	}
+	if body := downloadArtifact(ctx, t, c, owner, repo, reshareArtifact.GetID()); string(body) != "<h1>E2E</h1>" {
+		t.Fatalf("reshared artifact content = %q, want %q", body, "<h1>E2E</h1>")
+	}
+
+	// The reshare records itself too, which is what lets its own artifact URL be
+	// reshared in turn.
+	reshareRecord := artifactRecord{
+		ArtifactURL:  artifactURL(owner, repo, reshareRun.GetID(), reshareArtifact.GetID()),
+		ArtifactID:   reshareArtifact.GetID(),
+		RunID:        reshareRun.GetID(),
+		Commit:       reshareSHA,
+		PayloadDir:   stored.PayloadDir,
+		Input:        stored.Input,
+		InputType:    stored.InputType,
+		ResharedFrom: artifact.GetID(),
+		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := recordArtifact(ctx, c, owner, repo, branch, reshareRecord); err != nil {
+		t.Fatalf("record reshared artifact: %v", err)
+	}
+	chained, err := readArtifactRecord(ctx, c, owner, repo, branch, reshareArtifact.GetID())
+	if err != nil {
+		t.Fatalf("read reshared artifact record: %v", err)
+	}
+	if chained.PayloadDir != record.PayloadDir {
+		t.Errorf("reshared record payload dir = %q, want the original %q", chained.PayloadDir, record.PayloadDir)
+	}
+	if chained.ResharedFrom != artifact.GetID() {
+		t.Errorf("reshared record reshared_from = %d, want %d", chained.ResharedFrom, artifact.GetID())
+	}
+
+	// One payload directory regardless of how many times it was shared.
+	_, payloads, _, err := c.Repositories.GetContents(ctx, owner, repo, payloadsDir, &github.RepositoryContentGetOptions{Ref: branch})
+	if err != nil {
+		t.Fatalf("list payload directories: %v", err)
+	}
+	if len(payloads) != 1 {
+		t.Fatalf("%s holds %d entries, want 1 after a reshare", payloadsDir, len(payloads))
+	}
 }
 
 func TestGitHubAPIEndToEndDirectory(t *testing.T) {
@@ -198,7 +260,7 @@ func TestGitHubAPIEndToEndDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create payload: %v", err)
 	}
-	files[payloadRefPath] = []byte(ts + " dir site\n")
+	files[payloadRefPath] = payloadRef(shareID(), ts, "dir", "site")
 
 	sha, err := commitPayload(ctx, c, owner, repo, branch, "Share payload", files, func(string) {})
 	if err != nil {
@@ -394,7 +456,7 @@ func TestWorkflowMatchesLayout(t *testing.T) {
 	if !strings.Contains(workflow, "- '"+payloadRefPath+"'") {
 		t.Errorf("workflow does not trigger on %q:\n%s", payloadRefPath, workflow)
 	}
-	if !strings.Contains(workflow, "read -r PAYLOAD_DIR PAYLOAD_TYPE PAYLOAD_NAME < "+payloadRefPath) {
+	if !strings.Contains(workflow, "read -r SHARE_ID PAYLOAD_DIR PAYLOAD_TYPE PAYLOAD_NAME < "+payloadRefPath) {
 		t.Errorf("workflow does not read %q:\n%s", payloadRefPath, workflow)
 	}
 	if !strings.Contains(workflow, payloadsDir+"/${{ env.PAYLOAD_DIR }}/") {
@@ -408,5 +470,111 @@ func TestWorkflowMatchesLayout(t *testing.T) {
 	// keep hidden files or a shared directory silently loses its dotfiles.
 	if !strings.Contains(workflow, "include-hidden-files: true") {
 		t.Errorf("workflow does not set include-hidden-files:\n%s", workflow)
+	}
+}
+
+func TestPayloadRef(t *testing.T) {
+	t.Parallel()
+
+	got := string(payloadRef("20260828-120000-4a2f7d6bf6698163", "20260101-090000", "file", "report.html"))
+	want := "20260828-120000-4a2f7d6bf6698163 20260101-090000 file report.html\n"
+	if got != want {
+		t.Errorf("payloadRef() = %q, want %q", got, want)
+	}
+
+	// The share ID is the only thing that makes a reshare of an unchanged payload
+	// modify the file the workflow's push paths filter watches.
+	other := string(payloadRef("20260828-120000-9c1e05b3a7f2d846", "20260101-090000", "file", "report.html"))
+	if got == other {
+		t.Errorf("payloadRef() is identical for two share IDs: %q", got)
+	}
+}
+
+func TestPayloadRefKeepsNamesWithSpaces(t *testing.T) {
+	t.Parallel()
+
+	// The workflow reads the line with `read -r`, so the name must stay last for
+	// the shell to hand it over whole.
+	got := string(payloadRef("20260828-120000-4a2f7d6bf6698163", "20260101-090000", "file", "my report.html"))
+	if !strings.HasSuffix(got, " my report.html\n") {
+		t.Errorf("payloadRef() = %q, want the name to end the line", got)
+	}
+}
+
+func TestShareIDIsUniquePerCall(t *testing.T) {
+	t.Parallel()
+
+	// Timestamps alone collide here, because the clock resolution is only
+	// microseconds on some platforms, and a colliding share ID leaves a reshare
+	// waiting out its timeout on a workflow run that never starts.
+	seen := map[string]struct{}{}
+	for range 100 {
+		id := shareID()
+		if _, ok := seen[id]; ok {
+			t.Fatalf("shareID() returned %q twice", id)
+		}
+		seen[id] = struct{}{}
+	}
+}
+
+func TestParseArtifactRef(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		ref     string
+		want    int64
+		wantErr bool
+	}{
+		{name: "artifact URL", ref: "https://github.com/o/r/actions/runs/123/artifacts/456", want: 456},
+		{name: "artifact URL with trailing slash", ref: "https://github.com/o/r/actions/runs/123/artifacts/456/", want: 456},
+		{name: "bare ID", ref: "456", want: 456},
+		{name: "surrounding whitespace", ref: "  456\n", want: 456},
+		{name: "not a number", ref: "not-a-url", wantErr: true},
+		{name: "empty", ref: "", wantErr: true},
+		{name: "zero", ref: "0", wantErr: true},
+		{name: "negative", ref: "-1", wantErr: true},
+		// A run URL ends in a run ID, which names a different resource. Resolving
+		// it would report the run ID back as an artifact with no record.
+		{name: "run URL", ref: "https://github.com/o/r/actions/runs/123", wantErr: true},
+		{name: "API artifact URL", ref: "https://api.github.com/repos/o/r/actions/artifacts/456", want: 456},
+		{name: "artifacts path without an ID", ref: "https://github.com/o/r/actions/runs/123/artifacts", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := parseArtifactRef(tt.ref)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseArtifactRef(%q) = %d, want an error", tt.ref, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseArtifactRef(%q): %v", tt.ref, err)
+			}
+			if got != tt.want {
+				t.Errorf("parseArtifactRef(%q) = %d, want %d", tt.ref, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestArtifactRecordOmitsResharedFromOnFirstShare(t *testing.T) {
+	t.Parallel()
+
+	data, err := json.Marshal(artifactRecord{ArtifactID: 456, PayloadDir: payloadsDir + "/20260101-090000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "reshared_from") {
+		t.Errorf("artifactRecord = %s, want no reshared_from for a first share", data)
+	}
+	data, err = json.Marshal(artifactRecord{ArtifactID: 789, ResharedFrom: 456})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"reshared_from": 456`) && !strings.Contains(string(data), `"reshared_from":456`) {
+		t.Errorf("artifactRecord = %s, want reshared_from 456", data)
 	}
 }

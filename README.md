@@ -30,6 +30,9 @@ $ gh share --open pr123.html
 # Keep the staging branch after the upload
 $ gh share --persist pr123.html
 
+# Share a payload already on the staging branch again, by artifact URL or ID
+$ gh share --reshare 456
+
 # Output upload details as JSON
 $ gh share --json pr123.html
 
@@ -62,7 +65,14 @@ $ gh api "repos/OWNER/REPO/contents/.gh-share/artifacts/456.json?ref=gh-share-st
     -H 'Accept: application/vnd.github.raw'
 ```
 
-The record names the payload directory on the branch, so the shared file or directory can be recovered even after the artifact itself has expired under the retention policy.
+The record names the payload directory on the branch, so the shared file or directory can be recovered even after the artifact itself has expired under the retention policy. `--reshare` does that recovery for you: it reads the record, uploads the payload from the branch again, and prints a fresh artifact URL. The original file never has to be on your machine.
+
+```bash
+$ gh share --reshare https://github.com/OWNER/REPO/actions/runs/123/artifacts/456
+$ gh share --reshare 456
+```
+
+A reshare records its own artifact as well, with `reshared_from` pointing at the artifact it was made from. The URL it prints can therefore be reshared in turn, without limit. The payload directory is reused rather than copied, so only the records accumulate.
 
 ## How it works
 
@@ -71,6 +81,7 @@ The record names the payload directory on the branch, so the shared file or dire
 ```mermaid
 flowchart TD
     A[gh share file or directory] --> B[Resolve target repository with gh]
+    A2[gh share --reshare artifact URL or ID] --> B
     B --> C{Staging branch exists?}
     C -->|No| D[Create branch from default branch]
     C -->|Yes| E[Use staging branch]
@@ -89,7 +100,7 @@ The process is:
 1. Resolve the target repository with `gh repo view`.
 2. Check whether the staging branch exists. If it does not, create it from the repository's default branch.
 3. Create Git blobs for the payload and build the required tree structure through the GitHub Git Database API.
-4. Add `.gh-share/payload-ref` and the embedded `.github/workflows/upload-gh-share-payload.yml` workflow, then create one commit containing all of them.
+4. Add `.gh-share/payload-ref` and the embedded `.github/workflows/upload-gh-share-payload.yml` workflow, then create one commit containing all of them. The payload ref opens with a share ID that changes on every share.
 5. Update the staging branch to that commit. The push triggers the workflow because `.gh-share/payload-ref` changed.
 6. Poll GitHub Actions until the workflow completes and resolve the artifact URL.
 7. When the staging branch is kept, write `.gh-share/artifacts/<artifact id>.json` recording which input the artifact URL was produced from.
@@ -105,6 +116,8 @@ The workflow reads `.gh-share/payload-ref` to find the timestamped payload direc
 
 Only `.gh-share/payload-ref` triggers the workflow. That is what makes the artifact record possible: the record is written under `.gh-share/artifacts/`, so committing it does not start a second upload run for the same payload.
 
+It also means a reshare has to change that one file, and resharing a payload changes nothing about it. The payload ref therefore leads with a share ID, separate from the payload directory it names, so that rewriting the ID alone re-triggers the workflow while the payload stays where it is. The ID carries random bits rather than a finer timestamp, because a clock with microsecond resolution can hand two back-to-back reshares the same value, and an unchanged payload ref starts no run at all.
+
 The staging branch is based on the repository's default branch, so the GitHub API can build a valid commit without cloning or modifying the local repository.
 
 ## Command-line options
@@ -115,8 +128,11 @@ The staging branch is based on the repository's default branch, so the GitHub AP
 | `--branch` | Staging branch name. Defaults to `gh-share-staging`. |
 | `--open` | Open the artifact URL in the browser after the upload completes. |
 | `--persist` | Keep the staging branch after the upload. |
+| `--reshare` | Re-upload the payload behind an artifact URL or ID instead of a local path. |
 | `--json` | Output upload details as JSON. |
 | `--purge` | Delete gh-share workflow runs, artifacts, and staging branches instead of uploading. |
+
+`--reshare` takes an artifact URL or the bare ID at the end of it, reads `.gh-share/artifacts/<artifact id>.json` from the staging branch, and uploads the payload that record names again. Only artifacts shared with a kept staging branch have a record, so `--reshare` needs `--persist` to have been used on the original share. The staging branch is always kept afterwards, since deleting it would discard the payload that was just shared and end the chain of reshares.
 
 `--purge` asks for confirmation before removing all completed runs of the embedded gh-share workflow in the target repository. The associated artifacts and logs are removed with the runs, and branches used by those runs are deleted except for the repository's default branch and branches containing `.gh-share/persist`. The `.gh-share-persist` marker written before the `.gh-share/` layout still counts as one, so branches persisted by an earlier version are kept as well. Artifact URLs from the deleted runs will no longer work.
 
