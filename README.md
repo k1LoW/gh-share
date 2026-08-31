@@ -44,6 +44,12 @@ The primary use case is sharing a single-page HTML file. The command also suppor
 
 The command displays progress while it creates the staging branch, creates the commit, waits for the workflow, and removes or keeps the branch. The final output includes links to the staging branch, commit, workflow run, and artifact.
 
+Progress and the summary go to stderr, and the artifact URL is written to stdout on its own line, so it can be piped without `--json`:
+
+```bash
+$ gh share pr123.html | pbcopy
+```
+
 The payload is committed to the staging branch under `.gh-share/payloads/<timestamp>/`. That directory is the root of the upload, so the artifact holds its contents without the prefix. A file is uploaded unarchived and downloads as the file itself; a directory is uploaded as one zipped artifact.
 
 ## Staging branch layout
