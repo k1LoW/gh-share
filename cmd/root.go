@@ -434,7 +434,7 @@ func upload(ctx context.Context, c *github.Client, owner, repo string, plan payl
 		Artifact:      url,
 	}
 	if !shareJSON {
-		s.FinalMSG = "\n" + uploadMessage + "\n\n" + formatSummary(branchURL, branchStatus, commitURL, runURL) + formatArtifactURL(url)
+		s.FinalMSG = "\n" + uploadMessage + "\n\n" + formatSummary(branchURL, branchStatus, commitURL, runURL) + artifactURLLabel()
 	}
 	s.Stop()
 	if shareJSON {
@@ -443,7 +443,12 @@ func upload(ctx context.Context, c *github.Client, owner, repo string, plan payl
 		if err := encoder.Encode(result); err != nil {
 			return fmt.Errorf("encode JSON output: %w", err)
 		}
+		return nil
 	}
+	// The artifact URL is the only value worth piping, so it goes to stdout on
+	// its own while the progress output and its label stay on stderr.
+	fmt.Fprintln(os.Stdout, url)
+	fmt.Fprintln(os.Stderr)
 	return nil
 }
 
@@ -490,10 +495,8 @@ func formatSummary(branchURL, branchStatus, commitURL, runURL string) string {
 	return summary.String()
 }
 
-func formatArtifactURL(url string) string {
-	labelStyle := color.New(color.FgCyan, color.Bold)
-	valueStyle := color.New(color.FgWhite)
-	return fmt.Sprintf("%s\n%s\n\n", labelStyle.Sprint("Artifact URL:"), valueStyle.Sprint(url))
+func artifactURLLabel() string {
+	return color.New(color.FgCyan, color.Bold).Sprint("Artifact URL:") + "\n"
 }
 
 func repository(ctx context.Context, selector string) (string, string, error) {
