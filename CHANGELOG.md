@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.4.1](https://github.com/k1LoW/gh-share/compare/v0.4.0...v0.4.1) - 2026-08-31
+
+### Fix bug 🐛
+- fix: print the artifact URL to stdout by @k1LoW in https://github.com/k1LoW/gh-share/pull/21
+
 ## [v0.4.0](https://github.com/k1LoW/gh-share/compare/v0.3.0...v0.4.0) - 2026-08-28
 
 ### New Features 🎉
