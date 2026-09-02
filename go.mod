@@ -6,8 +6,8 @@ require (
 	github.com/briandowns/spinner v1.23.2
 	github.com/fatih/color v1.19.0
 	github.com/google/go-github/v79 v79.0.0
-	github.com/k1LoW/go-github-client/v79 v79.0.22
-	github.com/mattn/go-colorable v0.1.14
+	github.com/k1LoW/go-github-client/v79 v79.0.23
+	github.com/mattn/go-colorable v0.1.15
 	github.com/spf13/cobra v1.10.2
 )
 
