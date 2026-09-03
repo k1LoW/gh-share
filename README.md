@@ -140,7 +140,7 @@ The staging branch is based on the repository's default branch, so the GitHub AP
 
 `--reshare` takes an artifact URL or the bare ID at the end of it, reads `.gh-share/artifacts/<artifact id>.json` from the staging branch, and uploads the payload that record names again. Only artifacts shared with a kept staging branch have a record, so `--reshare` needs `--persist` to have been used on the original share. The staging branch is always kept afterwards, since deleting it would discard the payload that was just shared and end the chain of reshares.
 
-`--purge` asks for confirmation before removing all completed runs of the embedded gh-share workflow in the target repository. The associated artifacts and logs are removed with the runs, and branches used by those runs are deleted except for the repository's default branch and branches containing `.gh-share/persist`. The `.gh-share-persist` marker written before the `.gh-share/` layout still counts as one, so branches persisted by an earlier version are kept as well. Artifact URLs from the deleted runs will no longer work.
+`--purge` asks for confirmation before removing all completed runs of the embedded gh-share workflow in the target repository. The associated artifacts and logs are removed with the runs, and branches used by those runs are deleted except for the repository's default branch and branches containing `.gh-share/persist`. Artifact URLs from the deleted runs will no longer work.
 
 ## Installation
 
