@@ -68,11 +68,111 @@ func newShareCommand() *cobra.Command {
 		Short: "Share a single HTML file or other files and directories through GitHub Actions artifacts",
 		Long: `Share a single HTML file or other files and directories using GitHub's built-in Git and Actions APIs.
 
-gh-share creates a temporary staging branch, commits the payload and an upload workflow, waits for GitHub Actions to upload the artifact, and removes the branch when finished.
+gh-share creates a temporary staging branch in the target repository through the GitHub API, commits the payload together with an upload workflow, waits for GitHub Actions to upload the payload as an artifact, prints the artifact URL, and deletes the staging branch when it finishes. The local Git repository is never cloned, modified, or pushed, and the payload never lands on the default branch. Access to a shared artifact follows the target repository's own permissions.
 
-Use --reshare with an artifact URL or ID to upload a payload already stored on the staging branch again. Artifacts expire while the staging branch does not, so this hands out a fresh artifact URL without the payload ever leaving the repository.
+HOW A SHARE RUNS
+  1. Resolve the target repository by running "gh repo view", or use the
+     repository named by --repo.
+  2. Create the staging branch (--branch, default gh-share-staging) from the
+     repository's default branch when it does not already exist.
+  3. Commit the payload under .gh-share/payloads/<timestamp>/ together with the
+     trigger file .gh-share/payload-ref and the embedded workflow
+     .github/workflows/upload-gh-share-payload.yml, all as a single commit.
+  4. Poll GitHub Actions until the run for that commit completes. The wait times
+     out after 15 minutes.
+  5. Delete the staging branch unless it is kept, then print the artifact URL.
+     A branch that fails to delete leaves the command with an error and no URL
+     on stdout.
 
-Use --purge without an input path to delete gh-share workflow runs, their artifacts and logs, and associated staging branches.`,
+INPUT
+  A share takes exactly one existing local file or directory. --reshare takes an
+  artifact URL or ID in place of that path, and --purge takes no path at all.
+  A file is uploaded unarchived and downloads as the file itself.
+  A directory is uploaded as one zipped artifact whose root is the contents of
+  that directory, so no payload path prefix appears inside it. Hidden files are
+  included, paths leading outside the directory are not followed, and an empty
+  directory is rejected.
+
+OUTPUT
+  Without --json, the artifact URL goes to stdout on a line of its own while
+  everything else (spinner progress, the summary box, the Artifact URL label)
+  goes to stderr, so the URL can be piped on its own.
+  With --json, one JSON object goes to stdout instead, holding the keys
+  input, input_type ("file" or "dir"), repository, branch, branch_deleted,
+  commit, workflow, and artifact. Every key except input, input_type and
+  branch_deleted carries a URL. Combining --purge with --json prints
+  workflow_runs_deleted and staging_branches_deleted, or purged=false when the
+  confirmation is declined.
+  Errors go to stderr and the command exits non-zero.
+
+KEEPING THE BRANCH AND RESHARING
+  The staging branch is deleted after a successful upload unless --persist is
+  given, or the branch already carries the .gh-share/persist marker. --persist
+  writes that marker and so does every reshare, so a branch that has been
+  persisted or reshared once stays kept from then on. Uploaded artifacts still
+  expire on their own under the repository or organization retention policy,
+  whatever happens to the branch.
+  A kept branch also receives .gh-share/artifacts/<artifact id>.json recording
+  which payload directory an artifact URL was produced from. --reshare reads
+  that record and uploads the same payload again, handing out a fresh artifact
+  URL without the original file being present on the machine, even after the
+  first artifact has expired.
+  --reshare accepts the full artifact URL or the bare ID at the end of it, needs
+  the same --branch as the original share, and works only for a share whose
+  branch was kept, since that is when the record is written. A reshare always
+  keeps the branch and records its own artifact, so the URL it prints can be
+  reshared in turn, without limit.
+
+PURGING
+  --purge takes no input path and deletes every completed run of the gh-share
+  workflow in the target repository, together with the artifacts and logs
+  attached to those runs and the staging branches those runs used. The default
+  branch and any branch carrying a persist marker are never deleted. It refuses
+  to run while a gh-share run is still in progress, and asks for confirmation on
+  stderr first, reading the answer from stdin. Only "y" or "yes" confirms, and
+  an empty answer, an immediate EOF included, cancels, so "echo y | gh share
+  --purge" confirms it non-interactively. Artifact URLs from the deleted runs
+  stop working.
+
+REQUIREMENTS AND CONSTRAINTS
+  gh has to be installed and authenticated ("gh auth login") with permission to
+  create branches, commits, and files in the target repository, and GitHub
+  Actions has to be enabled there.
+  --purge and --reshare cannot be combined.
+  A branch name containing a space or any of ~ ^ : ? * [ \ is rejected.
+  An artifact in a private repository is reachable only by users who have access
+  to that repository.`,
+		Example: `  # Share a single-page HTML file and print its artifact URL
+  gh share pr123.html
+
+  # Share a directory as one zipped artifact
+  gh share assets/
+
+  # Share into another repository
+  gh share --repo OWNER/REPO pr123.html
+
+  # Open the artifact URL in the browser once the upload finishes
+  gh share --open pr123.html
+
+  # Keep the staging branch so the payload can be reshared later
+  gh share --persist pr123.html
+
+  # Pipe the artifact URL on its own
+  gh share pr123.html | pbcopy
+
+  # Machine-readable result
+  gh share --json pr123.html
+
+  # Upload a kept payload again and get a fresh artifact URL
+  gh share --reshare https://github.com/OWNER/REPO/actions/runs/123/artifacts/456
+  gh share --reshare 456
+
+  # Read what a given artifact URL was made from
+  gh api "repos/OWNER/REPO/contents/.gh-share/artifacts/456.json?ref=gh-share-staging" \
+    -H "Accept: application/vnd.github.raw"
+
+  # Delete gh-share workflow runs, their artifacts, and staging branches
+  gh share --purge`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			// --reshare takes an argument even alongside --purge, so that the two
 			// report as a conflicting pair rather than as a stray argument.
