@@ -85,14 +85,13 @@ HOW A SHARE RUNS
      on stdout.
 
 INPUT
-  Exactly one existing local file or directory is required.
+  A share takes exactly one existing local file or directory. --reshare takes an
+  artifact URL or ID in place of that path, and --purge takes no path at all.
   A file is uploaded unarchived and downloads as the file itself.
   A directory is uploaded as one zipped artifact whose root is the contents of
   that directory, so no payload path prefix appears inside it. Hidden files are
   included, paths leading outside the directory are not followed, and an empty
   directory is rejected.
-  --reshare takes an artifact URL or ID in place of a path, and --purge takes no
-  path at all.
 
 OUTPUT
   Without --json, the artifact URL goes to stdout on a line of its own while
@@ -108,9 +107,11 @@ OUTPUT
 
 KEEPING THE BRANCH AND RESHARING
   The staging branch is deleted after a successful upload unless --persist is
-  given, or the branch already carries the .gh-share/persist marker left by an
-  earlier --persist run. Uploaded artifacts still expire on their own under the
-  repository or organization retention policy, whatever happens to the branch.
+  given, or the branch already carries the .gh-share/persist marker. --persist
+  writes that marker and so does every reshare, so a branch that has been
+  persisted or reshared once stays kept from then on. Uploaded artifacts still
+  expire on their own under the repository or organization retention policy,
+  whatever happens to the branch.
   A kept branch also receives .gh-share/artifacts/<artifact id>.json recording
   which payload directory an artifact URL was produced from. --reshare reads
   that record and uploads the same payload again, handing out a fresh artifact
