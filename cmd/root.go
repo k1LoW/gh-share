@@ -96,7 +96,7 @@ OUTPUT
   Without --json, the artifact URL goes to stdout on a line of its own while
   everything else (spinner progress, the summary box, the Artifact URL label)
   goes to stderr, so the URL can be piped on its own.
-  With --json, one indented JSON object goes to stdout instead, holding the keys
+  With --json, one JSON object goes to stdout instead, holding the keys
   input, input_type ("file" or "dir"), repository, branch, branch_deleted,
   commit, workflow, and artifact. Every key except input, input_type and
   branch_deleted carries a URL. Combining --purge with --json prints
@@ -115,10 +115,10 @@ KEEPING THE BRANCH AND RESHARING
   URL without the original file being present on the machine, even after the
   first artifact has expired.
   --reshare accepts the full artifact URL or the bare ID at the end of it, needs
-  the same --branch as the original share, and works only for a share made with
-  --persist, since that is what wrote the record. A reshare always keeps the
-  branch and records its own artifact, so the URL it prints can be reshared in
-  turn, without limit.
+  the same --branch as the original share, and works only for a share whose
+  branch was kept, since that is when the record is written. A reshare always
+  keeps the branch and records its own artifact, so the URL it prints can be
+  reshared in turn, without limit.
 
 PURGING
   --purge takes no input path and deletes every completed run of the gh-share
@@ -126,9 +126,10 @@ PURGING
   attached to those runs and the staging branches those runs used. The default
   branch and any branch carrying a persist marker are never deleted. It refuses
   to run while a gh-share run is still in progress, and asks for confirmation on
-  stderr first, reading the answer from stdin. An empty answer or EOF cancels,
-  so confirming it non-interactively needs something like "yes | gh share
-  --purge". Artifact URLs from the deleted runs stop working.
+  stderr first, reading the answer from stdin. Only "y" or "yes" confirms, and
+  an empty answer, an immediate EOF included, cancels, so "echo y | gh share
+  --purge" confirms it non-interactively. Artifact URLs from the deleted runs
+  stop working.
 
 REQUIREMENTS AND CONSTRAINTS
   gh has to be installed and authenticated ("gh auth login") with permission to
