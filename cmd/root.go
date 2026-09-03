@@ -80,7 +80,9 @@ HOW A SHARE RUNS
      .github/workflows/upload-gh-share-payload.yml, all as a single commit.
   4. Poll GitHub Actions until the run for that commit completes. The wait times
      out after 15 minutes.
-  5. Print the artifact URL, then delete the staging branch unless it is kept.
+  5. Delete the staging branch unless it is kept, then print the artifact URL.
+     A branch that fails to delete leaves the command with an error and no URL
+     on stdout.
 
 INPUT
   Exactly one existing local file or directory is required.
