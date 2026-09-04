@@ -192,7 +192,7 @@ func purge(ctx context.Context, in io.Reader, out io.Writer) error {
 		}
 		persist, err := hasPersistMarker(ctx, c, owner, repo, branch)
 		if err != nil {
-			return fmt.Errorf("check persist marker for staging branch %s: %w", branch, err)
+			return err
 		}
 		if persist {
 			continue
