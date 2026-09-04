@@ -1,5 +1,15 @@
 # Changelog
 
+## [v0.5.0](https://github.com/k1LoW/gh-share/compare/v0.4.1...v0.5.0) - 2026-09-04
+
+### Breaking Changes 🛠
+- refactor!: drop the pre-.gh-share/ persistence marker by @k1LoW in https://github.com/k1LoW/gh-share/pull/26
+### New Features 🎉
+- docs: make --help enough to use the command on its own by @k1LoW in https://github.com/k1LoW/gh-share/pull/25
+### Dependency Updates ⬆️
+- chore(deps): bump the dependencies group with 2 updates by @dependabot[bot] in https://github.com/k1LoW/gh-share/pull/24
+- chore(deps): bump Songmu/tagpr from 1.20.1 to 1.20.2 in the dependencies group by @dependabot[bot] in https://github.com/k1LoW/gh-share/pull/23
+
 ## [v0.4.1](https://github.com/k1LoW/gh-share/compare/v0.4.0...v0.4.1) - 2026-08-31
 
 ### Fix bug 🐛
