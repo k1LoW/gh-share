@@ -620,10 +620,10 @@ func TestHasPersistMarker(t *testing.T) {
 			// handed back under a lock rather than through the ordering that the
 			// response happens to impose.
 			var mu sync.Mutex
-			var path, ref string
+			var requestPath, requestRef string
 			c := stubGitHubClient(t, func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
-				path, ref = r.URL.Path, r.URL.Query().Get("ref")
+				requestPath, requestRef = r.URL.Path, r.URL.Query().Get("ref")
 				mu.Unlock()
 				w.WriteHeader(tt.status)
 				_, _ = w.Write([]byte(`{"message":"stub"}`))
@@ -632,7 +632,7 @@ func TestHasPersistMarker(t *testing.T) {
 			got, err := hasPersistMarker(context.Background(), c, "k1LoW", "gh-share", "gh-share-staging")
 
 			mu.Lock()
-			gotPath, gotRef := path, ref
+			gotPath, gotRef := requestPath, requestRef
 			mu.Unlock()
 
 			// The path and the ref are asserted because a lookup aimed anywhere
