@@ -582,18 +582,19 @@ func TestArtifactRecordOmitsResharedFromOnFirstShare(t *testing.T) {
 	}
 }
 
-// stubGitHubClient serves every API call from h, so a test can state what the
-// GitHub contents endpoint answers without reaching the network.
+// stubGitHubClient points the client's API and upload endpoints at h, so a
+// test can state what GitHub answers without reaching the network.
 func stubGitHubClient(t *testing.T, h http.HandlerFunc) *github.Client {
 	t.Helper()
 	server := httptest.NewServer(h)
 	t.Cleanup(server.Close)
-	c := github.NewClient(nil)
 	base, err := url.Parse(server.URL + "/")
 	if err != nil {
 		t.Fatalf("parse stub server URL: %v", err)
 	}
+	c := github.NewClient(server.Client())
 	c.BaseURL = base
+	c.UploadURL = base
 	return c
 }
 
