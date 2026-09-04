@@ -39,11 +39,6 @@ const (
 	artifactsDir   = metaDir + "/artifacts"
 	persistPath    = metaDir + "/persist"
 	workflowPath   = ".github/workflows/" + workflowFile
-
-	// Staging branches created before the .gh-share/ layout carry the marker at
-	// the repository root. Reading it keeps those branches from being treated as
-	// unmarked and deleted on the next share or purge.
-	legacyPersistPath = ".gh-share-persist"
 )
 
 var shareRepo, shareBranch string
@@ -297,7 +292,7 @@ func purge(ctx context.Context, in io.Reader, out io.Writer) error {
 		}
 		persist, err := hasPersistMarker(ctx, c, owner, repo, branch)
 		if err != nil {
-			return fmt.Errorf("check persist marker for staging branch %s: %w", branch, err)
+			return err
 		}
 		if persist {
 			continue
@@ -362,9 +357,9 @@ func share(ctx context.Context, input string) error {
 	name := filepath.Base(filepath.Clean(input))
 	files[payloadRefPath] = payloadRef(shareID(), ts, kind, name)
 	if sharePersist {
-		// Written unconditionally so a branch still marked by the pre-.gh-share/
-		// path picks up the current one. Rewriting identical content reuses the
-		// existing blob, so the commit carries no change for this path.
+		// Not gated on the marker already being present. Rewriting identical
+		// content reuses the existing blob, so the commit carries no change for
+		// this path.
 		files[persistPath] = []byte("\n")
 	}
 	return upload(ctx, c, owner, repo, payloadPlan{
@@ -665,16 +660,11 @@ func payloadFiles(input string, dir bool, ts string) (map[string][]byte, error) 
 }
 
 func hasPersistMarker(ctx context.Context, c *github.Client, owner, repo, branch string) (bool, error) {
-	for _, path := range []string{persistPath, legacyPersistPath} {
-		found, err := branchContains(ctx, c, owner, repo, branch, path)
-		if err != nil {
-			return false, fmt.Errorf("check persist marker: %w", err)
-		}
-		if found {
-			return true, nil
-		}
+	found, err := branchContains(ctx, c, owner, repo, branch, persistPath)
+	if err != nil {
+		return false, fmt.Errorf("check persist marker: %w", err)
 	}
-	return false, nil
+	return found, nil
 }
 
 func branchContains(ctx context.Context, c *github.Client, owner, repo, branch, path string) (bool, error) {

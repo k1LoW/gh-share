@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -576,5 +579,84 @@ func TestArtifactRecordOmitsResharedFromOnFirstShare(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"reshared_from": 456`) && !strings.Contains(string(data), `"reshared_from":456`) {
 		t.Errorf("artifactRecord = %s, want reshared_from 456", data)
+	}
+}
+
+// stubGitHubClient points the client's API and upload endpoints at h, so a
+// test can state what GitHub answers without reaching the network.
+func stubGitHubClient(t *testing.T, h http.HandlerFunc) *github.Client {
+	t.Helper()
+	server := httptest.NewServer(h)
+	t.Cleanup(server.Close)
+	base, err := url.Parse(server.URL + "/")
+	if err != nil {
+		t.Fatalf("parse stub server URL: %v", err)
+	}
+	c := github.NewClient(server.Client())
+	c.BaseURL = base
+	c.UploadURL = base
+	return c
+}
+
+func TestHasPersistMarker(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		status  int
+		want    bool
+		wantErr bool
+	}{
+		{name: "marker present", status: http.StatusOK, want: true},
+		{name: "marker absent", status: http.StatusNotFound},
+		// An empty repository answers 409 for any path, which means the branch
+		// carries no marker rather than that the lookup failed.
+		{name: "empty repository", status: http.StatusConflict},
+		{name: "lookup fails", status: http.StatusInternalServerError, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// The handler runs on the server's goroutine, so what it observed is
+			// handed back under a lock rather than through the ordering that the
+			// response happens to impose.
+			var mu sync.Mutex
+			var requestPath, requestRef string
+			c := stubGitHubClient(t, func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				requestPath, requestRef = r.URL.Path, r.URL.Query().Get("ref")
+				mu.Unlock()
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(`{"message":"stub"}`))
+			})
+
+			got, err := hasPersistMarker(context.Background(), c, "k1LoW", "gh-share", "gh-share-staging")
+
+			mu.Lock()
+			gotPath, gotRef := requestPath, requestRef
+			mu.Unlock()
+
+			// The path and the ref are asserted because a lookup aimed anywhere
+			// else reports an unmarked branch, and an unmarked branch is one that
+			// the next share or --purge deletes.
+			if want := "/repos/k1LoW/gh-share/contents/" + persistPath; gotPath != want {
+				t.Errorf("requested path = %q, want %q", gotPath, want)
+			}
+			if want := "gh-share-staging"; gotRef != want {
+				t.Errorf("requested ref = %q, want %q", gotRef, want)
+			}
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("hasPersistMarker() = %v, want an error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("hasPersistMarker(): %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("hasPersistMarker() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
