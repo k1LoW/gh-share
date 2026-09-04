@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -615,14 +616,24 @@ func TestHasPersistMarker(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			var gotPath, gotRef string
+			// The handler runs on the server's goroutine, so what it observed is
+			// handed back under a lock rather than through the ordering that the
+			// response happens to impose.
+			var mu sync.Mutex
+			var path, ref string
 			c := stubGitHubClient(t, func(w http.ResponseWriter, r *http.Request) {
-				gotPath, gotRef = r.URL.Path, r.URL.Query().Get("ref")
+				mu.Lock()
+				path, ref = r.URL.Path, r.URL.Query().Get("ref")
+				mu.Unlock()
 				w.WriteHeader(tt.status)
 				_, _ = w.Write([]byte(`{"message":"stub"}`))
 			})
 
 			got, err := hasPersistMarker(context.Background(), c, "k1LoW", "gh-share", "gh-share-staging")
+
+			mu.Lock()
+			gotPath, gotRef := path, ref
+			mu.Unlock()
 
 			// The path and the ref are asserted because a lookup aimed anywhere
 			// else reports an unmarked branch, and an unmarked branch is one that
