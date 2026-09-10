@@ -10,7 +10,7 @@ The upload is performed through the GitHub API. It does not use the local Git re
 - **Repository-based access control** — Shared HTML files and other artifacts follow the target repository's GitHub permissions and artifact access policies.
 - **No local Git operations** — The extension creates the staging branch and commit through the GitHub API without cloning, changing, or pushing the local repository.
 - **Works with files and directories** — Share a single HTML file, any other file, or a directory as one artifact.
-- **Automatic cleanup** — The temporary staging branch is deleted after a successful upload by default; use `--persist` when you need to keep it. Uploaded artifacts are then automatically removed according to the repository or organization's GitHub Actions retention policy, independently of staging branch retention.
+- **Automatic cleanup** — The temporary staging branch is deleted after a successful upload by default; use `--persist` when you need to keep it. Persisting is sticky, so once a branch carries the `.gh-share/persist` marker, later shares onto it are kept without `--persist` being passed again. Uploaded artifacts are then automatically removed according to the repository or organization's GitHub Actions retention policy, independently of staging branch retention.
 
 ## Usage
 
@@ -59,12 +59,12 @@ Everything gh-share writes to the staging branch lives under `.gh-share/`, apart
 ```
 .gh-share/
   payload-ref                   # the workflow's only trigger path
-  persist                       # present when --persist was used
+  persist                       # present once persisted; keeps later shares too
   payloads/<timestamp>/         # the uploaded payload
   artifacts/<artifact id>.json  # what a given artifact URL was made from
 ```
 
-With `--persist`, the artifact record makes an artifact URL resolvable back to its source. Take the artifact ID from the end of the URL and read the matching record:
+On a kept branch, the artifact record makes an artifact URL resolvable back to its source. Take the artifact ID from the end of the URL and read the matching record:
 
 ```bash
 $ gh api "repos/OWNER/REPO/contents/.gh-share/artifacts/456.json?ref=gh-share-staging" \
@@ -133,12 +133,12 @@ The staging branch is based on the repository's default branch, so the GitHub AP
 | `--repo` | Target repository in `OWNER/REPO` format. Defaults to the current repository. |
 | `--branch` | Staging branch name. Defaults to `gh-share-staging`. |
 | `--open` | Open the artifact URL in the browser after the upload completes. |
-| `--persist` | Keep the staging branch after the upload. |
+| `--persist` | Keep the staging branch after the upload. A branch that already carries the `.gh-share/persist` marker is kept without this option. |
 | `--reshare` | Re-upload the payload behind an artifact URL or ID instead of a local path. |
 | `--json` | Output upload details as JSON. |
 | `--purge` | Delete gh-share workflow runs, artifacts, and staging branches instead of uploading. |
 
-`--reshare` takes an artifact URL or the bare ID at the end of it, reads `.gh-share/artifacts/<artifact id>.json` from the staging branch, and uploads the payload that record names again. Only artifacts shared with a kept staging branch have a record, so `--reshare` needs `--persist` to have been used on the original share. The staging branch is always kept afterwards, since deleting it would discard the payload that was just shared and end the chain of reshares.
+`--reshare` takes an artifact URL or the bare ID at the end of it, reads `.gh-share/artifacts/<artifact id>.json` from the staging branch, and uploads the payload that record names again. Only artifacts shared with a kept staging branch have a record, so `--reshare` needs the original share to have kept the branch, whether through `--persist` or through an already persisted branch. The staging branch is always kept afterwards, since deleting it would discard the payload that was just shared and end the chain of reshares.
 
 `--purge` asks for confirmation before removing all completed runs of the embedded gh-share workflow in the target repository. The associated artifacts and logs are removed with the runs, and branches used by those runs are deleted except for the repository's default branch and branches containing `.gh-share/persist`. Artifact URLs from the deleted runs will no longer work.
 
