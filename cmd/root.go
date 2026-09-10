@@ -63,7 +63,7 @@ func newShareCommand() *cobra.Command {
 		Short: "Share a single HTML file or other files and directories through GitHub Actions artifacts",
 		Long: `Share a single HTML file or other files and directories using GitHub's built-in Git and Actions APIs.
 
-gh-share creates a temporary staging branch in the target repository through the GitHub API, commits the payload together with an upload workflow, waits for GitHub Actions to upload the payload as an artifact, prints the artifact URL, and deletes the staging branch when it finishes. The local Git repository is never cloned, modified, or pushed, and the payload never lands on the default branch. Access to a shared artifact follows the target repository's own permissions.
+gh-share creates a temporary staging branch in the target repository through the GitHub API, commits the payload together with an upload workflow, waits for GitHub Actions to upload the payload as an artifact, prints the artifact URL, and deletes the staging branch when it finishes unless that branch is persisted. The local Git repository is never cloned, modified, or pushed, and the payload never lands on the default branch. Access to a shared artifact follows the target repository's own permissions.
 
 HOW A SHARE RUNS
   1. Resolve the target repository by running "gh repo view", or use the
@@ -76,6 +76,9 @@ HOW A SHARE RUNS
   4. Poll GitHub Actions until the run for that commit completes. The wait times
      out after 15 minutes.
   5. Delete the staging branch unless it is kept, then print the artifact URL.
+     A branch is kept when --persist is given and also when it already carries
+     the .gh-share/persist marker from an earlier persist or reshare, so a share
+     onto such a branch is persisted without --persist being passed again.
      A branch that fails to delete leaves the command with an error and no URL
      on stdout.
 
@@ -192,7 +195,7 @@ REQUIREMENTS AND CONSTRAINTS
 	cmd.Flags().StringVar(&shareRepo, "repo", "", "Target repository (owner/repo; defaults to the current repository)")
 	cmd.Flags().StringVar(&shareBranch, "branch", defaultBranch, "Staging branch name")
 	cmd.Flags().BoolVar(&shareOpen, "open", false, "Open the artifact URL in the browser")
-	cmd.Flags().BoolVar(&sharePersist, "persist", false, "Keep the staging branch after upload")
+	cmd.Flags().BoolVar(&sharePersist, "persist", false, "Keep the staging branch after upload (a branch already carrying the persist marker is kept without it)")
 	cmd.Flags().BoolVar(&shareJSON, "json", false, "Output upload details as JSON")
 	cmd.Flags().BoolVar(&shareReshare, "reshare", false, "Re-upload the payload behind an artifact URL or ID kept on the staging branch")
 	cmd.Flags().BoolVar(&sharePurge, "purge", false, "Delete gh-share workflow runs, artifacts, and staging branches")
