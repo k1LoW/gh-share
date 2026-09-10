@@ -4,4 +4,4 @@ package version
 const Name = "gh-share"
 
 // Version is the application version.
-var Version = "0.5.0"
+var Version = "0.5.1"
