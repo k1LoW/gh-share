@@ -1,5 +1,12 @@
 # Changelog
 
+## [v0.5.1](https://github.com/k1LoW/gh-share/compare/v0.5.0...v0.5.1) - 2026-09-10
+
+### Dependency Updates ⬆️
+- chore(deps): bump Songmu/tagpr from 1.20.2 to 1.20.3 in the dependencies group by @dependabot[bot] in https://github.com/k1LoW/gh-share/pull/28
+### Other Changes
+- docs: describe persisting as a property of the branch, not of --persist by @k1LoW in https://github.com/k1LoW/gh-share/pull/29
+
 ## [v0.5.0](https://github.com/k1LoW/gh-share/compare/v0.4.1...v0.5.0) - 2026-09-04
 
 ### Breaking Changes 🛠
