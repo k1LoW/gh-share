@@ -50,6 +50,8 @@ Progress and the summary go to stderr, and the artifact URL is written to stdout
 $ gh share pr123.html | pbcopy
 ```
 
+The progress display needs a terminal on stdout, so piping or redirecting it leaves out the summary box as well. A single line on stderr, `Staging branch: <url> (kept)` or `(deleted)`, then reports the branch decision. A non-interactive caller that needs that decision should use `--json` and read `branch_deleted` instead of parsing it.
+
 The payload is committed to the staging branch under `.gh-share/payloads/<timestamp>/`. That directory is the root of the upload, so the artifact holds its contents without the prefix. A file is uploaded unarchived and downloads as the file itself; a directory is uploaded as one zipped artifact.
 
 ## Staging branch layout
