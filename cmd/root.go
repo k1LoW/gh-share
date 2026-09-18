@@ -531,10 +531,18 @@ func upload(ctx context.Context, c *github.Client, owner, repo string, plan payl
 		Workflow:      runURL,
 		Artifact:      url,
 	}
+	// Asking the spinner whether it is running, rather than checking for a
+	// terminal here, keeps this on the same condition that decides whether the
+	// summary box prints at all. The spinner never starts without a terminal, and
+	// then Stop() drops FinalMSG and takes the branch status down with it.
+	summaryPrints := s.Active()
 	if !shareJSON {
 		s.FinalMSG = "\n" + uploadMessage + "\n\n" + formatSummary(branchURL, branchStatus, commitURL, runURL) + artifactURLLabel()
 	}
 	s.Stop()
+	if !shareJSON && !summaryPrints {
+		fmt.Fprintln(os.Stderr, branchStatusLine(branchURL, branchStatus))
+	}
 	if shareJSON {
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
@@ -591,6 +599,12 @@ func formatSummary(branchURL, branchStatus, commitURL, runURL string) string {
 	summary.WriteString(borderStyle.Sprint(bottomBorder))
 	summary.WriteByte('\n')
 	return summary.String()
+}
+
+// branchStatusLine carries the one part of the summary a caller cannot recover
+// from stdout, for the runs where the box never prints.
+func branchStatusLine(branchURL, branchStatus string) string {
+	return fmt.Sprintf("Staging branch: %s (%s)", branchURL, branchStatus)
 }
 
 func artifactURLLabel() string {
