@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.5.2](https://github.com/k1LoW/gh-share/compare/v0.5.1...v0.5.2) - 2026-09-18
+
+### Other Changes
+- fix: report the branch decision when the summary box cannot print by @k1LoW in https://github.com/k1LoW/gh-share/pull/32
+
 ## [v0.5.1](https://github.com/k1LoW/gh-share/compare/v0.5.0...v0.5.1) - 2026-09-10
 
 ### Dependency Updates ⬆️
