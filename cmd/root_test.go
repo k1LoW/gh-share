@@ -400,6 +400,23 @@ func TestFormatSummary(t *testing.T) {
 	}
 }
 
+func TestBranchStatusLine(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []string{"kept", "deleted"} {
+		got := branchStatusLine("https://github.com/k1LoW/gh-share/tree/gh-share-staging", status)
+		want := "Staging branch: https://github.com/k1LoW/gh-share/tree/gh-share-staging (" + status + ")"
+		if got != want {
+			t.Errorf("branchStatusLine() = %q, want %q", got, want)
+		}
+		// The line exists for the runs with no terminal behind them, so it has to
+		// stay readable once it lands in a log or a captured buffer.
+		if strings.ContainsRune(got, '\x1b') {
+			t.Errorf("branchStatusLine() contains an escape sequence: %q", got)
+		}
+	}
+}
+
 func TestConfirmPurge(t *testing.T) {
 	t.Parallel()
 
