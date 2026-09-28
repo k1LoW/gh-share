@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.5.3](https://github.com/k1LoW/gh-share/compare/v0.5.2...v0.5.3) - 2026-09-28
+
+### Other Changes
+- ci: generate CREDITS with gocredits v1.0.0 from a make target by @k1LoW in https://github.com/k1LoW/gh-share/pull/34
+
 ## [v0.5.2](https://github.com/k1LoW/gh-share/compare/v0.5.1...v0.5.2) - 2026-09-18
 
 ### Other Changes
